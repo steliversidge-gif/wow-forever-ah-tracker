@@ -150,5 +150,13 @@ jobs:
           if [ "${scheduled:-0}" -gt 0 ]; then
             echo "GitHub's schedule is running: stepping aside."
           else
-            gh workflow run collect.yml --ref "${{ github.ref_name }}"
+            # GitHub occasionally fails to start a run ("startup failure"), which
+            # would silently end the chain, so check it started and try again.
+            for attempt in 1 2 3 4 5; do
+              gh workflow run collect.yml --ref "${{ github.ref_name }}"
+              sleep 45
+              state=$(gh run list --workflow collect.yml --event workflow_dispatch --limit 1 --json status,conclusion -q '.[0] | "\(.status) \(.conclusion)"')
+              echo "Attempt $attempt: newest started run is $state"
+              case "$state" in *startup_failure*) sleep 60 ;; *) break ;; esac
+            done
           fi

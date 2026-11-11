@@ -231,7 +231,8 @@ async function viewFarm() {
       <td class="num">${money(x.ref_price)}</td><td class="num">${pct(x.trend_per_day, true)}</td>
       <td class="num">${num(x.sold_per_day, 1)}</td><td class="num">${money(gold(x))}</td>
       <td class="num">${stock(x) == null ? '–' : num(stock(x), 1)}</td></tr>`).join('')}</tbody></table></div>`
-      : `<div class="note">${h.n_snaps < 7 ? 'Still collecting: sales rates need about 6 hours of snapshots.' : 'Nothing matches these filters.'}</div>`;
+      : `<div class="note">${d.items.some(x => x.sold_per_day > 0) ? 'Nothing matches these filters.'
+        : `Still collecting: sales rates need 6 hours of history, which is 7 hourly snapshots in a row. ${h.n_snaps} collected so far.`}</div>`;
   };
   const bind = (id, key) => $(id).addEventListener('input', e => { G[key] = e.target.value; draw(); });
   bind('#g-q', 'q'); bind('#g-how', 'how'); bind('#g-min', 'minPrice'); bind('#g-sort', 'sort');
