@@ -116,13 +116,17 @@ def build_history(points: list[tuple[float, int | None, int]], span_hours: float
 
 
 def _deposit(vendor: int | None, qty: int, is_commodity: bool, fees: HouseFees) -> int:
-    """Deposit put at risk by posting `qty` units together for one listing period.
+    """Deposit put at risk for one listing period: one stack for stackable goods,
+    one auction per item for gear.
 
-    Checked in game (2026-11-11, Bronze Shortsword x1 and x5 at 2h/8h/24h): the
-    deposit is a share of vendor value that grows in step with the duration,
-    and the 1 silver minimum applies to the whole posting, gear included.
+    Checked in game (2026-11-11, Bronze Shortsword at 2h/8h/24h): the deposit
+    is a share of vendor value that grows in step with the duration. The 1
+    silver minimum is charged PER AUCTION - five swords posted together for 2h
+    cost 5s, although the posting screen quoted 2s 84c.
     """
-    return max(fees.min_deposit, round(fees.deposit_rate * (vendor or 0) * qty))
+    if is_commodity:
+        return max(fees.min_deposit, round(fees.deposit_rate * (vendor or 0) * qty))
+    return qty * max(fees.min_deposit, round(fees.deposit_rate * (vendor or 0)))
 
 
 def expected_expiries(days_to_sell: float, listing_hours: float) -> float:

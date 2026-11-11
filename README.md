@@ -104,7 +104,7 @@ Commit and push; the workflow re-runs and drops the other candidates.
 Blizzard has not published Forever's auction fees, so `config.toml` holds what the
 in-game auction house charged on 2026-11-11: a 5% cut, a 24h deposit of 60% of vendor
 value (300% at Blackwater; shorter listings cost proportionally less: 20% for 8h, 5% for
-2h) and a 1 silver minimum deposit per posting. Blackwater's 15%
+2h) and a 1 silver minimum deposit per auction. Blackwater's 15%
 cut is still Classic's figure and has not been checked. Every profit figure depends on
 these, so correct them if the game charges you something different.
 

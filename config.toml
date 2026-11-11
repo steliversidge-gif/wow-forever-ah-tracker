@@ -25,7 +25,8 @@ neutral_cut = 0.15           # Blackwater; Classic's rate, not yet checked in ga
 deposit_rate = 0.60          # deposit as a share of vendor value for 24h. Checked in game 2026-11-11:
                              # it grows with duration (2h 5%, 8h 20%, 24h 60%)
 neutral_deposit_rate = 3.00  # Blackwater, 24h listing (checked in game 2026-11-11)
-min_deposit = 100            # copper; 1 silver minimum per posting, however many units (checked 2026-11-11)
+min_deposit = 100            # copper; 1 silver minimum per auction. Gear is one auction per item, and the
+                             # game charges it per item even when the posting screen quotes less (checked 2026-11-11)
 listing_hours = 24
 
 [tuning]

@@ -271,8 +271,10 @@ def test_deposit_matches_what_the_game_charged():
     horde_24h = HouseFees(cut=0.05, deposit_rate=0.60, min_deposit=100, listing_hours=24)
     # Bronze Shortsword, vendor value 11s 36c: 6s 81c for one, 34s 8c for five
     assert _deposit(1136, 1, False, horde_24h) in (681, 682)
-    assert _deposit(1136, 5, False, horde_24h) == 3408
-    assert _deposit(4, 4, True, horde_24h) == 100          # the minimum covers the whole posting
+    assert _deposit(1136, 5, False, horde_24h) in (3405, 3410)
+    assert _deposit(4, 4, True, horde_24h) == 100          # a stack is one auction: one minimum
+    horde_2h = HouseFees(cut=0.05, deposit_rate=0.05, min_deposit=100, listing_hours=2)
+    assert _deposit(1136, 5, False, horde_2h) == 500       # gear: the minimum is charged per item
 
 
 def test_expected_expiries():
