@@ -509,9 +509,12 @@ def test_sales_far_above_typical_are_not_counted():
 
 
 def test_cooldown_recipe_is_judged_as_a_single_craft():
-    hist = build_history([(float(t), 2000, 2) for t in range(12)], span_hours=12)
-    mats = [("Bar", 1, 500, False)]
-    free = craft_signal([(2000, 3)], hist, mats, 1.0, "Alchemy", 500, False, FEES, TUN)
-    capped = craft_signal([(2000, 3)], hist, mats, 1.0, "Alchemy", 500, False, FEES, TUN, cooldown_days=2)
-    assert free.buy_qty > 1
-    assert capped is None or (capped.buy_qty == 1 and any("one craft" in r for r in capped.reasons))
+    from forever_ah.signals import craft_signal
+
+    hist = levelled(sold={200000: 40}, sold_per_day=40.0, total_sold=280, ref_price=200000)
+    mats = [("Thorium Bar", 1, 2500, False), ("Arcane Crystal", 1, 100000, False)]
+    free = craft_signal([(200000, 3)], hist, mats, 1.0, "Alchemy", 500, False, FEES, TUN)
+    capped = craft_signal([(200000, 3)], hist, mats, 1.0, "Alchemy", 500, False, FEES, TUN, cooldown_days=2)
+    assert free.buy_qty == 20
+    assert capped.buy_qty == 1 and capped.buy_cost == 102500
+    assert "one craft" in capped.reasons[1]
