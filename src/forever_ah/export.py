@@ -6,6 +6,7 @@ by `forever-ah serve` locally.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import shutil
@@ -152,9 +153,15 @@ def export_site(conn: sqlite3.Connection, settings: Settings) -> Path:
         shutil.rmtree(data_dir)
     data_dir.mkdir(parents=True)
     web = resources.files("forever_ah") / "web"
-    for asset in web.iterdir():
-        if asset.is_file():
-            (dist / asset.name).write_bytes(asset.read_bytes())
+    assets = {a.name: a.read_bytes() for a in web.iterdir() if a.is_file()}
+    # Stamp the script and stylesheet links with a content hash so browsers
+    # pick up a new version instead of serving a stale cached copy.
+    page = assets["index.html"].decode("utf-8")
+    for name in ("app.js", "style.css"):
+        page = page.replace(f'"{name}"', f'"{name}?v={hashlib.sha256(assets[name]).hexdigest()[:10]}"')
+    assets["index.html"] = page.encode("utf-8")
+    for name, content in assets.items():
+        (dist / name).write_bytes(content)
     (dist / ".nojekyll").write_text("", encoding="utf-8")
 
     houses = []

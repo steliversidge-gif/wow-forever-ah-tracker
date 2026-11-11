@@ -7,7 +7,7 @@ import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 
-from forever_ah.blizzard import BlizzardClient, http_date_to_utc
+from forever_ah.blizzard import WOWHEAD_CLASSES, BlizzardClient, http_date_to_utc
 from forever_ah.config import FACTIONS, Settings
 from forever_ah.lifecycle import Listing, diff_snapshot
 from forever_ah.pricing import market_price, price_levels
@@ -186,8 +186,12 @@ def collect(conn: sqlite3.Connection, client: BlizzardClient, settings: Settings
 
 def resolve_items(conn: sqlite3.Connection, client: BlizzardClient, limit: int = 4000) -> int:
     """Fetch names / vendor prices for item ids we have not seen (or that failed over a day ago)."""
+    # Rows stored before Wowhead's category names were mapped onto Blizzard's.
+    conn.executemany("UPDATE items SET item_class = ? WHERE item_class = ? AND source = 'wowhead-forever'",
+                     [(ours, theirs) for theirs, ours in WOWHEAD_CLASSES.items()])
+    conn.commit()
     retry_before = (datetime.now(UTC) - timedelta(days=1)).strftime(TIME_FMT)
-    todo = [r[0] for r in conn.execute(
+    todo =[r[0] for r in conn.execute(
         "SELECT DISTINCT v.item_id FROM variants v LEFT JOIN items i ON i.item_id = v.item_id "
         # An unnamed item gets one prompt retry, then one more a day later.
         "WHERE i.item_id IS NULL OR (i.name IS NULL AND (i.attempts < 2 OR "

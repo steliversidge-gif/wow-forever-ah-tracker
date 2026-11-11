@@ -26,6 +26,13 @@ TOKEN_URL = "https://oauth.battle.net/token"
 TIMEOUT = (10, 180)
 WOWHEAD_ITEM_URL = "https://www.wowhead.com/forever/item={item_id}&xml"
 
+# Wowhead's category names, mapped onto the ones Blizzard's API uses.
+WOWHEAD_CLASSES = {
+    "Weapons": "Weapon", "Consumables": "Consumable", "Recipes": "Recipe", "Containers": "Container",
+    "Projectiles": "Projectile", "Quivers": "Quiver", "Keys": "Key", "Reagents": "Reagent",
+    "Gems": "Gem", "Glyphs": "Glyph", "Quest Items": "Quest",
+}
+
 
 def parse_wowhead_item(xml: str) -> dict | None:
     """Turn Wowhead's item XML into the fields we use, shaped like Blizzard's item JSON."""
@@ -42,10 +49,11 @@ def parse_wowhead_item(xml: str) -> dict | None:
         return int(m.group(1)) if m else None
 
     level = text("level")
+    item_class = text("class")
     return {
         "name": name.group(1),
         "quality": {"name": text("quality")},
-        "item_class": {"name": text("class")},
+        "item_class": {"name": WOWHEAD_CLASSES.get(item_class, item_class)},
         "item_subclass": {"name": text("subclass")},
         "level": int(level) if level and level.isdigit() else None,
         "required_level": number("reqlevel"),
