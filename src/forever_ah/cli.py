@@ -29,6 +29,8 @@ def cmd_run(args) -> int:
     houses = [h["house_id"] for h in collector.tracked_houses(conn, settings)] if args.reanalyse else updated
     for house_id in houses:
         analyse.analyse_house(conn, house_id, settings)
+    if houses:
+        analyse.analyse_exports(conn, settings)
 
     dist_missing = not (settings.dist_path / "data" / "meta.json").exists()
     if updated or args.reanalyse or dist_missing:

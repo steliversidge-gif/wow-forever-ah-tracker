@@ -1,6 +1,6 @@
 """The recommendation engine: what to buy, what to sell it for, and how risky. Pure functions.
 
-Three strategies, all inside ONE auction house:
+Three strategies inside ONE auction house, and one that crosses to Blackwater:
 
 VENDOR  Listings priced below what an NPC vendor pays. Buy, walk to a vendor,
         sell. No market risk at all.
@@ -9,6 +9,10 @@ FLIP    The cheapest listings sit well under the next price up. Buy them and
         price), so you are the cheapest seller again.
 DIP     The whole market is well below its typical price. Buy the cheap units
         and relist near typical. Slower and riskier: it needs the price to recover.
+EXPORT  Buy in a faction house and list on the neutral Blackwater house, where
+        the other faction can buy it. Only suggested for items that have
+        actually been selling on Blackwater, priced no higher than the buyers
+        pay on their own house, and with profit to spare after a lost deposit.
 
 Every metric has exactly one definition, here, so the dashboard (and any later
 consumer such as an AI agent) can never disagree about what "profit" means.
@@ -17,10 +21,10 @@ consumer such as an AI agent) can never disagree about what "profit" means.
 from __future__ import annotations
 
 import math
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 
 from forever_ah.config import Fees, Tuning
-from forever_ah.pricing import Level, median
+from forever_ah.pricing import Level, format_money, median
 
 
 @dataclass(frozen=True)
@@ -165,9 +169,16 @@ def assess_risk(strategy: str, days_to_sell: float, hist: History) -> tuple[int,
         score += 15
         reasons.append("Relies on the price recovering")
 
+    if strategy == "EXPORT":
+        score += 10
+        reasons.append("Blackwater is a thin market")
+
     score = min(score, 100)
-    level = "LOW" if score < 30 else "MEDIUM" if score < 55 else "HIGH"
-    return score, level, reasons
+    return score, _risk_level(score), reasons
+
+
+def _risk_level(score: int) -> str:
+    return "LOW" if score < 30 else "MEDIUM" if score < 55 else "HIGH"
 
 
 def _finish(strategy: str, qty: int, max_price: int, cost: int, target: int, days: float,
@@ -253,6 +264,60 @@ def dip_signal(levels: list[Level], hist: History, vendor: int | None, is_commod
     ahead = sum(q for p, q in levels if p < target) - qty
     days = (max(ahead, 0) + qty) / hist.sold_per_day
     return _finish("DIP", qty, max_price, cost, target, days, hist, vendor, is_commodity, fees, tun)
+
+
+def export_signal(levels: list[Level], dest_levels: list[Level], dest_hist: History,
+                  dest_sold_price: float | None, buyer_price: int | None, buyer: str | None,
+                  vendor: int | None, is_commodity: bool, dest_fees: HouseFees, tun: Tuning) -> Signal | None:
+    """Buy from `levels` (a faction house) and list on Blackwater.
+
+    dest_*: the item's Blackwater order book, history and average price of its
+    observed sales there. buyer_price: what the other faction pays on their own
+    house (None if not listed there); buyer: that faction's name, or None when
+    its house is not tracked.
+    """
+    if not levels or not dest_hist.sold_per_day or dest_hist.total_sold < tun.export_min_sold:
+        return None
+    # Asking prices on Blackwater are often wishful, so the target needs a real
+    # anchor - what it sold for there, or what the buyers pay at home - and is
+    # the lowest of every ceiling we know about.
+    if not dest_sold_price and not buyer_price:
+        return None
+    ceilings = [c for c in (
+        dest_levels[0][0] - 1 if dest_levels else None,   # be the cheapest listing there
+        dest_sold_price,
+        buyer_price - 1 if buyer_price else None,         # nobody pays more than at home
+        dest_hist.ref_price if dest_hist.n_snaps >= tun.min_history_snaps else None,
+    ) if c]
+    target = int(min(ceilings))
+    most_to_pay = target * (1 - dest_fees.cut) / (1 + tun.min_roi)
+    max_units = max(1, int(dest_hist.sold_per_day * tun.horizon_days))
+    qty = cost = max_price = 0
+    for price, q in levels[: tun.max_levels]:
+        if price > most_to_pay or qty >= max_units:
+            break
+        take = min(q, max_units - qty)
+        qty += take
+        cost += take * price
+        max_price = price
+    if qty == 0:
+        return None
+    sig = _finish("EXPORT", qty, max_price, cost, target, qty / dest_hist.sold_per_day, dest_hist,
+                  vendor, is_commodity, dest_fees, tun)
+    deposit = _deposit(vendor, qty, is_commodity, dest_fees)
+    if sig is None or sig.profit < deposit:   # must survive one listing expiring unsold
+        return None
+    score, extra = sig.risk_score, []
+    if deposit * 2 > sig.profit:
+        score = min(score + 10, 100)
+        extra.append("One expired listing costs over half the profit")
+    reasons = [f"List on Blackwater ({dest_fees.cut:.0%} cut)"]
+    if buyer:
+        reasons.append(f"{buyer.capitalize()} pays {format_money(buyer_price)} at home" if buyer_price
+                       else f"Not listed on the {buyer.capitalize()} house")
+    reasons.append(f"Deposit at stake: {format_money(deposit)} per {dest_fees.listing_hours}h")
+    return replace(sig, risk_score=score, risk_level=_risk_level(score),
+                   reasons=reasons + sig.reasons + extra)
 
 
 def evaluate(levels: list[Level], hist: History, vendor: int | None, vendor_verified: bool,

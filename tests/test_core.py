@@ -165,3 +165,56 @@ def test_parse_wowhead_item():
     assert item["item_class"]["name"] == "Armor"
     assert (item["level"], item["required_level"], item["sell_price"]) == (11, 6, 156)
     assert parse_wowhead_item("<wowhead><error>Item not found!</error></wowhead>") is None
+
+
+# -- export via Blackwater ------------------------------------------------------
+BW = HouseFees(cut=0.15, deposit_rate=3.0, min_deposit=100, listing_hours=24)
+BW_HIST = History(n_snaps=30, ref_price=1000, sold_per_day=20.0, total_sold=40)
+
+
+def export(levels=((500, 10),), dest_levels=((1200, 5),), hist=BW_HIST, sold_price=1000.0,
+           buyer_price=1100, buyer="alliance", vendor=10, commodity=True):
+    from forever_ah.signals import export_signal
+    return export_signal(list(levels), list(dest_levels), hist, sold_price, buyer_price, buyer,
+                         vendor, commodity, BW, TUN)
+
+
+def test_export_prices_at_the_lowest_ceiling_and_nets_the_cut():
+    sig = export()
+    assert sig.strategy == "EXPORT"
+    assert sig.sell_price == 1000                       # what it sold for there, below both asks
+    assert (sig.buy_qty, sig.buy_max_price, sig.buy_cost) == (10, 500, 5000)
+    assert sig.profit == 10 * 850 - 5000                # 15% cut, sells within a day so no lost deposit
+    assert sig.reasons[0].startswith("List on Blackwater")
+    assert "Alliance pays 11s at home" in sig.reasons
+
+
+def test_export_never_asks_more_than_buyers_pay_at_home():
+    assert export(buyer_price=900).sell_price == 899
+    assert export(buyer_price=550) is None              # no margin left after the cut
+
+
+def test_export_undercuts_the_cheapest_blackwater_listing():
+    assert export(dest_levels=((800, 5),)).sell_price == 799
+
+
+def test_export_needs_real_blackwater_sales():
+    assert export(hist=History(n_snaps=30, ref_price=1000, sold_per_day=None, total_sold=0)) is None
+    assert export(hist=History(n_snaps=30, ref_price=1000, sold_per_day=2.0, total_sold=2)) is None
+    assert export(sold_price=None, buyer_price=None) is None   # only asking prices to go on
+
+
+def test_export_buys_no_more_than_a_day_of_blackwater_sales():
+    sig = export(levels=((500, 100),))
+    assert sig.buy_qty == 20
+
+
+def test_export_skips_items_where_one_lost_deposit_eats_the_profit():
+    # vendor 400 -> a 24h Blackwater deposit of 12s per unit against 3s 50c profit per unit
+    assert export(vendor=400, commodity=False, levels=((500, 1),)) is None
+
+
+def test_export_item_missing_from_buyers_house():
+    sig = export(buyer_price=None)
+    assert sig.sell_price == 1000
+    assert "Not listed on the Alliance house" in sig.reasons

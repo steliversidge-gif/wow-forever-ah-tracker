@@ -67,16 +67,21 @@ function riskBadge(level) {
   const [color, shape, label] = RISK[level] || RISK.HIGH;
   return `<span class="badge ${shape}"><i style="background:var(--${color})"></i>${label}</span>`;
 }
-const PLAY = { VENDOR: 'Sell to a vendor', FLIP: 'Relist under the next price', DIP: 'Hold for recovery' };
+const PLAY = {
+  VENDOR: 'Sell to a vendor', FLIP: 'Relist under the next price', DIP: 'Hold for recovery',
+  EXPORT: 'Buy here, list on Blackwater for the other faction',
+};
+const sellCell = s => money(s.sell_price) + (s.strategy === 'EXPORT' ? '<span class="why">on Blackwater</span>' : '');
 
 // ---------------------------------------------------------------- buy list --
 async function viewBuy() {
   const h = houseMeta(S.houseId), d = await loadHouse(S.houseId);
   view.innerHTML = `
     <h1>Buy list — ${esc(houseLabel(h))}</h1>
-    <p class="lead">Each row is one trade inside this auction house: what to buy, the most to pay per unit,
-      what to relist it for, and the profit after the house cut. Risk reflects how fast the item sells,
-      how much history backs the estimate, and where the price is heading.</p>
+    <p class="lead">Each row is one trade: what to buy in this auction house, the most to pay per unit,
+      what to relist it for, and the profit after the house cut. EXPORT rows are bought here and listed on
+      Blackwater instead. Risk reflects how fast the item sells, how much history backs the estimate,
+      and where the price is heading.</p>
     <div class="filters">
       <label>Budget (gold)<input id="f-budget" type="number" min="0" step="1" placeholder="any" value="${esc(F.budget)}"></label>
       <label>Min profit (silver)<input id="f-profit" type="number" min="0" step="1" value="${esc(F.minProfit)}"></label>
@@ -84,7 +89,7 @@ async function viewBuy() {
         <option value="HIGH">Any</option><option value="MEDIUM">Medium or lower</option>
         <option value="LOW">Low or none</option><option value="NONE">None (vendor only)</option></select></label>
       <label>Play<select id="f-play"><option value="">All</option><option value="VENDOR">Vendor</option>
-        <option value="FLIP">Flip</option><option value="DIP">Dip</option></select></label>
+        <option value="FLIP">Flip</option><option value="DIP">Dip</option><option value="EXPORT">Export</option></select></label>
       <label>Sort by<select id="f-sort"><option value="profit">Profit</option><option value="roi">Return</option>
         <option value="risk">Lowest risk</option><option value="speed">Fastest sale</option></select></label>
       <label>Search<input id="f-q" type="search" placeholder="item name" value="${esc(F.q)}"></label>
@@ -123,7 +128,7 @@ async function viewBuy() {
         <td class="item">${itemLink(s)}<span class="why">${esc(s.reasons.join(' · '))}</span></td>
         <td><span class="play" title="${esc(PLAY[s.strategy])}">${s.strategy}</span></td>
         <td class="num">${num(s.buy_qty)}</td><td class="num">${money(s.buy_max_price)}</td>
-        <td class="num">${money(s.buy_cost)}</td><td class="num">${money(s.sell_price)}</td>
+        <td class="num">${money(s.buy_cost)}</td><td class="num">${sellCell(s)}</td>
         <td class="num"><b>${money(s.profit)}</b></td><td class="num">${pct(s.roi)}</td>
         <td class="num">${sellsIn(s.days_to_sell)}</td><td>${riskBadge(s.risk_level)}</td></tr>`).join('')}
       </tbody></table></div>`;
@@ -195,7 +200,9 @@ async function viewItem(variantId) {
       · ${esc(houseLabel(h))}</p>
     ${sigs.map(s => `<div class="advice">
       <p><b>Buy ${num(s.buy_qty)}</b> at up to <b>${money(s.buy_max_price)}</b> each (${money(s.buy_cost)} in total).
-        ${s.strategy === 'VENDOR' ? `Sell to a vendor for <b>${money(s.sell_price)}</b> each.` : `Relist at <b>${money(s.sell_price)}</b> each.`}
+        ${s.strategy === 'VENDOR' ? `Sell to a vendor for <b>${money(s.sell_price)}</b> each.`
+          : s.strategy === 'EXPORT' ? `List on the Blackwater house at <b>${money(s.sell_price)}</b> each.`
+          : `Relist at <b>${money(s.sell_price)}</b> each.`}
         Expected profit <b>${money(s.profit)}</b> (${pct(s.roi)}) after fees.</p>
       <p>Risk: ${riskBadge(s.risk_level)} <span class="muted">— ${esc(s.reasons.join(' · '))}</span></p></div>`).join('')}
     <div class="tiles">
@@ -317,36 +324,39 @@ function barChart(el, t, values, label) {
 }
 
 // ----------------------------------------------------------- cross-faction --
+// Every EXPORT trade, both directions: buy in one faction's house, list on
+// Blackwater for the other faction to buy.
 async function viewCross() {
-  const mine = houseMeta(S.houseId);
-  const pick = faction => S.meta.houses.find(h => h.faction === faction && h.pinned)
-    || S.meta.houses.find(h => h.faction === faction && h.slot === mine.slot)
-    || S.meta.houses.find(h => h.faction === faction);
-  const a = pick('alliance'), o = pick('horde');
-  if (!a || !o) {
-    view.innerHTML = '<h1>Cross-faction</h1><div class="note">Needs both an Alliance and a Horde house to be tracked.</div>';
+  const sources = S.meta.houses.filter(h => h.pinned && h.faction !== 'blackwater');
+  const dest = S.meta.houses.find(h => h.pinned && h.faction === 'blackwater');
+  if (!dest || !sources.length) {
+    view.innerHTML = `<h1>Cross-faction</h1><div class="note">Needs a confirmed Blackwater house and at least one
+      confirmed faction house — see Status.</div>`;
     return;
   }
-  const [da, dh] = await Promise.all([loadHouse(a.id), loadHouse(o.id)]);
-  const cut = S.meta.fees.faction_cut, rows = [];
-  for (const x of da.items) {
-    const y = dh.byId.get(x.variant_id);
-    if (!y || x.quantity < 5 || y.quantity < 5) continue;
-    const [buy, sell, from, to] = x.min_price <= y.min_price ? [x, y, 'Alliance', 'Horde'] : [y, x, 'Horde', 'Alliance'];
-    const net = Math.floor(sell.min_price * (1 - cut)) - buy.min_price;
-    if (net <= 0 || !(sell.sold_per_day >= 1)) continue;
-    rows.push({ x, from, to, buy: buy.min_price, sell: sell.min_price, net, gap: sell.min_price / buy.min_price - 1, spd: sell.sold_per_day });
-  }
-  rows.sort((p, q) => q.gap - p.gap);
-  view.innerHTML = `<h1>Cross-faction price gaps</h1>
-    <p class="lead">${esc(houseLabel(a))} against ${esc(houseLabel(o))}. Informational: moving goods between factions
-      means going through the neutral Blackwater house (assumed ${pct(S.meta.fees.neutral_cut)} cut) or a second character,
-      and that route is not confirmed for Forever. ${a.pinned && o.pinned ? '' : '<b>These two houses are not confirmed as the same ruleset yet</b> — see Status.'}</p>
-    <div class="table-wrap"><table><thead><tr><th>Item</th><th>Buy on</th><th class="num">Cheapest there</th><th>Sell on</th>
-    <th class="num">Cheapest there</th><th class="num">Gap</th><th class="num">Net per unit</th><th class="num">Sold / day (sell side)</th></tr></thead>
-    <tbody>${rows.slice(0, 200).map(r => `<tr><td class="item">${itemLink(r.x)}</td><td>${r.from}</td><td class="num">${money(r.buy)}</td>
-    <td>${r.to}</td><td class="num">${money(r.sell)}</td><td class="num">${pct(r.gap, true)}</td><td class="num">${money(r.net)}</td>
-    <td class="num">${num(r.spd, 1)}</td></tr>`).join('') || '<tr><td colspan="8" class="muted">Nothing yet — sales history is needed on the selling side.</td></tr>'}</tbody></table></div>`;
+  const loaded = await Promise.all(sources.map(h => loadHouse(h.id)));
+  const rows = loaded.flatMap((d, i) => d.signals.filter(s => s.strategy === 'EXPORT')
+    .map(s => ({ ...s, from: cap(sources[i].faction) })));
+  rows.sort((a, b) => b.profit - a.profit);
+  const fees = S.meta.fees;
+  view.innerHTML = `<h1>Cross-faction: sell through Blackwater</h1>
+    <p class="lead">Buy in a faction house, list on Blackwater for the other faction to buy. A trade only appears when the
+      item has actually been selling on Blackwater, the price is no higher than the buyers pay on their own house, and the
+      profit survives the ${pct(fees.neutral_cut)} cut and one lost deposit. Blackwater is a thin market, so treat these
+      as riskier than a flip.</p>
+    ${rows.length ? `<p class="muted">${rows.length} trade${rows.length === 1 ? '' : 's'}${rows.length > 200 ? ' (showing the top 200)' : ''}</p>
+    <div class="table-wrap"><table><thead><tr><th>Item</th><th>Buy on</th><th class="num">Buy</th><th class="num">Pay up to</th>
+      <th class="num">Total cost</th><th class="num">List on Blackwater at</th><th class="num">Profit</th>
+      <th class="num">Return</th><th class="num">Sells in</th><th>Risk</th></tr></thead>
+    <tbody>${rows.slice(0, 200).map(s => `<tr>
+      <td class="item">${itemLink(s)}<span class="why">${esc(s.reasons.join(' · '))}</span></td><td>${s.from}</td>
+      <td class="num">${num(s.buy_qty)}</td><td class="num">${money(s.buy_max_price)}</td>
+      <td class="num">${money(s.buy_cost)}</td><td class="num">${money(s.sell_price)}</td>
+      <td class="num"><b>${money(s.profit)}</b></td><td class="num">${pct(s.roi)}</td>
+      <td class="num">${sellsIn(s.days_to_sell)}</td><td>${riskBadge(s.risk_level)}</td></tr>`).join('')}</tbody></table></div>`
+    : `<div class="note">${dest.n_snaps < 7
+        ? `Still collecting: about 6 hours of Blackwater sales history are needed before these can be judged (${dest.n_snaps} hourly snapshot${dest.n_snaps === 1 ? '' : 's'} so far).`
+        : 'No cross-faction trades clear the cut and deposit in the latest snapshot.'}</div>`}`;
 }
 
 // ------------------------------------------------------------------ status --

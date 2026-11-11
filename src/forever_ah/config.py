@@ -36,6 +36,7 @@ class Tuning:
     min_history_snaps: int = 6
     min_profit: int = 100
     min_roi: float = 0.05
+    export_min_sold: int = 3            # Blackwater sales seen before an EXPORT is suggested
     ladder_levels: int = 25             # order-book depth exported per item
 
 

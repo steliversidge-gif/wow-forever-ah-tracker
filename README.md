@@ -14,16 +14,23 @@ Pages. No server, no home PC left on, nothing to pay for.
 | **Buy list** | One row per trade: how many to buy, the most to pay, what to sell each for, profit after the house cut, how long it should take to sell, and a risk rating with the reasons behind it. Filter by budget, minimum profit, risk and play. |
 | **Market** | Every listed item with its cheapest price, typical price, trend and estimated sales per day. Use it to price things you want to sell. |
 | **Item page** | Price history, estimated sales, and the order book with the running cost of buying it out. |
-| **Cross-faction** | Alliance against Horde prices. Informational only. |
+| **Cross-faction** | Every EXPORT trade in both directions: buy in one faction's house, list on Blackwater for the other faction. |
 | **Status** | Collector health, fee assumptions, and the one-off "which house is mine?" setup. |
 
-### The three plays
+### The four plays
 
 - **VENDOR** – listed below what an NPC vendor pays. Buy it, vendor it. No market risk.
 - **FLIP** – the cheapest listings sit well under the next price up. Buy them, relist just
   under that next price (never above the item's typical price).
 - **DIP** – the whole market is 25%+ under its typical price. Buy cheap, relist near
   typical. Slower, and it depends on the price recovering.
+- **EXPORT** – buy in your faction's house and list on the neutral Blackwater house, where
+  the other faction can buy it. Needs all three houses confirmed in `config.toml`. A trade
+  is only suggested when the item has actually been selling on Blackwater (about 6 hours
+  of history, at least 3 sales), it is priced no higher than the buyers pay on their own
+  house or than it has sold for on Blackwater, and the profit survives Blackwater's cut
+  and one lost deposit. Blackwater carries roughly a twentieth of a faction house's
+  volume, so these are rated riskier than a flip.
 
 Risk is a 0–100 score built from four things: how fast the item sells, how much history
 backs the estimate, how volatile the price is, and whether it is falling. Every signal
@@ -88,9 +95,11 @@ Commit and push; the workflow re-runs and drops the other candidates.
 
 ### 3. Check the fee assumptions
 
-Blizzard has not published Forever's auction fees. `config.toml` assumes Classic's (5%
-cut, 15% at Blackwater) and a 1 silver minimum deposit. Compare with what the in-game
-auction house charges you and correct them, because every profit figure depends on them.
+Blizzard has not published Forever's auction fees, so `config.toml` holds what the
+in-game auction house charged on 2026-11-11: a 5% cut, a 24h deposit of 60% of vendor
+value (300% at Blackwater) and a 1 silver minimum deposit per listing. Blackwater's 15%
+cut is still Classic's figure and has not been checked. Every profit figure depends on
+these, so correct them if the game charges you something different.
 
 ## Running it locally (optional)
 

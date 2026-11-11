@@ -110,7 +110,7 @@ CREATE TABLE IF NOT EXISTS market (
 CREATE TABLE IF NOT EXISTS signals (
     house_id      INTEGER NOT NULL,
     variant_id    INTEGER NOT NULL,
-    strategy      TEXT NOT NULL,          -- VENDOR | FLIP | DIP
+    strategy      TEXT NOT NULL,          -- VENDOR | FLIP | DIP | EXPORT
     buy_qty       INTEGER NOT NULL,
     buy_max_price INTEGER NOT NULL,
     buy_cost      INTEGER NOT NULL,
