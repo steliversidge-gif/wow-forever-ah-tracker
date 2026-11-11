@@ -61,7 +61,7 @@ lists its reasons in plain English. All definitions live in one file,
 ## How it works
 
 ```
-GitHub Actions (hourly; until GitHub's scheduler is seen working, each run starts the next)
+GitHub Actions (hourly; each run starts the next whenever GitHub's scheduler misses the hour)
   ├─ download the SQLite database from the "state" release
   ├─ forever-ah run
   │    ├─ collect   Blizzard API → diff against live listings → hourly per-item summary

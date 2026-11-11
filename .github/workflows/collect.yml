@@ -6,11 +6,12 @@ name: Collect and publish
 #
 # Timing: Blizzard publishes a new snapshot hourly at about :25:25.
 #
-# GitHub's scheduler did not fire at all in this repository's first hours, so
-# as a stand-in the workflow restarts itself: the "next" job waits until :27
-# and starts the following run. It steps aside for good the moment GitHub's
-# schedule is seen working. If collection ever stops (schedule silent and no
-# chain), press "Run workflow" once in the Actions tab to restart the chain.
+# GitHub's scheduler is unreliable here (no runs for the first hours, then one
+# in four hours), so the workflow also restarts itself: the "next" job waits
+# until :27 and starts the following run, unless a scheduled run has already
+# started since the snapshot was published. Every hour GitHub's schedule
+# covers, the chain does nothing. If collection ever stops, press "Run
+# workflow" once in the Actions tab to restart the chain.
 
 on:
   schedule:
@@ -116,12 +117,12 @@ jobs:
         uses: actions/deploy-pages@v5
 
   next:
-    # Stand-in for GitHub's scheduler: wait for Blizzard's next snapshot, then
-    # start the next run - unless the real schedule has started working, in
-    # which case do nothing and let it take over. Only the newest waiter
-    # survives, so pushes and manual runs never multiply the chain.
+    # Backstop for GitHub's scheduler: wait for Blizzard's next snapshot, then
+    # start the next run - unless another run has already started since that
+    # snapshot was published, in which case that run carries the chain on.
+    # Only the newest waiter survives, so runs never multiply the chain.
     needs: collect
-    if: ${{ !cancelled() && github.event_name != 'schedule' }}
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 75
     concurrency:
@@ -143,12 +144,17 @@ jobs:
             if [ "$target" -le $(( now + 20 )) ]; then target=$(( target + 3600 )); fi
             wait=$(( target - now ))
           fi
-          echo "Starting the next run in ${wait}s unless GitHub's schedule takes over"
+          # A run only covers this hour if it started after the snapshot was
+          # published (:25:30) and after this wait began.
+          wake=$(( now + wait ))
+          published=$(( wake - wake % 3600 + 25 * 60 + 30 ))
+          if [ "$published" -lt "$now" ]; then published=$now; fi
+          since=$(date -u -d "@$published" +%Y-%m-%dT%H:%M:%SZ)
+          echo "Starting the next run in ${wait}s unless another run starts after $since"
           sleep "$wait"
-          since=$(date -u -d '3 hours ago' +%Y-%m-%dT%H:%M:%SZ)
-          scheduled=$(gh run list --workflow collect.yml --event schedule --created ">$since" --limit 1 --json databaseId -q 'length')
-          if [ "${scheduled:-0}" -gt 0 ]; then
-            echo "GitHub's schedule is running: stepping aside."
+          others=$(gh run list --workflow collect.yml --created ">$since" --limit 20 --json databaseId -q '[.[] | select(.databaseId != ${{ github.run_id }})] | length')
+          if [ "${others:-0}" -gt 0 ]; then
+            echo "Another run has already started for this snapshot: nothing to do."
           else
             # GitHub occasionally fails to start a run ("startup failure"), which
             # would silently end the chain, so check it started and try again.
