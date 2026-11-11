@@ -155,7 +155,7 @@ def assess_risk(strategy: str, days_to_sell: float, hist: History) -> tuple[int,
 
     if hist.trend_per_day is not None:
         if hist.trend_per_day < -0.15:
-            score += 20
+            score += 30
             reasons.append(f"Price falling {abs(hist.trend_per_day):.0%} a day")
         elif hist.trend_per_day < -0.05:
             score += 10

@@ -414,7 +414,8 @@ async function start() {
   sel.innerHTML = S.meta.houses.map(h => `<option value="${h.id}">${esc(houseLabel(h))}</option>`).join('');
   let saved = null;
   try { saved = Number(localStorage.getItem('house')); } catch { /* storage unavailable */ }
-  S.houseId = houseMeta(saved) ? saved : (S.meta.houses[0] || {}).id;
+  const asked = Number(new URLSearchParams(location.search).get('house'));   // ?house=110 for shareable links
+  S.houseId = houseMeta(asked) ? asked : houseMeta(saved) ? saved : (S.meta.houses[0] || {}).id;
   sel.value = S.houseId;
   sel.addEventListener('change', () => {
     S.houseId = Number(sel.value);
