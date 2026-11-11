@@ -12,6 +12,7 @@ tallied into one small summary row per item per hourly snapshot.
   signal_log  one row per recommendation when first made, scored later against
               what the market then did (the scorecard)
   rate_counts hourly tallies the sale / expiry / repost base rates are re-measured from
+  item_facts  per item, from Wowhead: how it is obtained and, if crafted, its recipe
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS houses (
@@ -160,6 +161,19 @@ CREATE TABLE IF NOT EXISTS rate_counts (
     lapsed_reposted INTEGER NOT NULL,     --   ...and came straight back identical
     PRIMARY KEY (house_id, snapshot_id, kind)
 ) WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS item_facts (
+    item_id    INTEGER PRIMARY KEY,
+    name       TEXT,
+    sources    TEXT,                      -- JSON list of Wowhead source codes (see professions.SOURCES)
+    buy_price  INTEGER,                   -- copper an NPC vendor charges, if any sells it
+    skill      INTEGER,                   -- profession skill-line id of the recipe, if crafted
+    spell_name TEXT,                      -- the recipe's name
+    makes      REAL,                      -- average units per craft
+    reagents   TEXT,                      -- JSON [[item id, count, name], ...]
+    fetched_at TEXT NOT NULL,
+    ok         INTEGER NOT NULL           -- 0 when Wowhead had nothing; retried after a day
+);
 """
 
 # Statements that bring an older database up to each version.
@@ -169,6 +183,7 @@ MIGRATIONS = {
         "ALTER TABLE item_stats ADD COLUMN new_levels TEXT",
         "ALTER TABLE signals ADD COLUMN list_hours INTEGER",
     ),
+    3: (),   # only a new table, which the schema script creates
 }
 
 

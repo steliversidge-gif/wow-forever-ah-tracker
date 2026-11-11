@@ -10,10 +10,19 @@ from itertools import groupby
 
 from forever_ah.config import FACTIONS, Settings
 from forever_ah.pricing import market_price
-from forever_ah.signals import build_history, evaluate, export_signal, house_fees
+from forever_ah.professions import PROFESSIONS, VENDOR_ONLY, disenchant_yield
+from forever_ah.signals import (
+    build_history,
+    craft_signal,
+    disenchant_signal,
+    evaluate,
+    export_signal,
+    house_fees,
+)
 
 log = logging.getLogger(__name__)
 TIME_FMT = "%Y-%m-%d %H:%M:%S"
+MAX_VENDOR_SUPPLY = 5000   # copper: the dearest vendor-only material trusted as always available
 
 
 def _hours(ts: str) -> float:
@@ -87,10 +96,72 @@ def analyse_house(conn: sqlite3.Connection, house_id: int, settings: Settings) -
     history, span_hours, _ = loaded
 
     vendor = _vendor_prices(conn)
+    ladders = load_ladders(conn, house_id)
+
+    # What each item is (for disenchanting) and the plain, unmodified variant of each item (for materials).
+    item_of, base_variant, item_name = {}, {}, {}
+    for variant_id, item_id, bonus, quality, item_class, level, name in conn.execute(
+            "SELECT v.variant_id, v.item_id, v.bonus, i.quality, i.item_class, i.level, i.name FROM variants v "
+            "LEFT JOIN items i ON i.item_id = v.item_id"):
+        item_of[variant_id] = (item_id, quality, item_class, level)
+        item_name[item_id] = name
+        if not bonus:
+            base_variant[item_id] = variant_id
+    facts = {r[0]: r[1:] for r in conn.execute(
+        "SELECT item_id, name, sources, buy_price, skill, makes, reagents FROM item_facts WHERE ok = 1")}
+
+    def unit_price(item_id: int) -> tuple[int | None, bool]:
+        """(what one unit costs to obtain, bought from a vendor). Vendor-only goods cost their
+        vendor price; everything else is priced at this house's market price."""
+        f = facts.get(item_id)
+        # Only everyday supplies (thread, flux, vials): a dear "vendor-only" item is more
+        # likely a limited or beta-only vendor than a dependable source.
+        if f and f[2] and f[2] <= MAX_VENDOR_SUPPLY and f[1] and json.loads(f[1]) == VENDOR_ONLY:
+            return f[2], True
+        listed = ladders.get(base_variant.get(item_id))
+        return (market_price(listed[1], tun.market_fraction), False) if listed else (None, False)
+
+    def sale_value(item_id: int) -> int | None:
+        """What a material fetches here: the lower of its market price and its typical price."""
+        variant = base_variant.get(item_id)
+        listed = ladders.get(variant)
+        if not listed:
+            return None
+        now = market_price(listed[1], tun.market_fraction)
+        typical = history[variant].ref_price if variant in history else None
+        return min(now, typical) if typical else now
+
+    def material_name(item_id: int) -> str:
+        return (facts.get(item_id) or (None,))[0] or item_name.get(item_id) or f"Item #{item_id}"
+
+    # Crafting and disenchanting are judged in the faction houses only: Blackwater's
+    # asking prices are too wishful to value materials by.
+    makes_things = house["faction"] != "blackwater"
+
+    def craft(variant_id: int, levels: list, hist, is_commodity: bool):
+        item_id = item_of.get(variant_id, (None,))[0]
+        f = facts.get(item_id)
+        if not f or not f[5] or base_variant.get(item_id) != variant_id:
+            return None
+        materials = []
+        for reagent_id, count, name in json.loads(f[5]):
+            price, from_vendor = unit_price(reagent_id)
+            if price is None:
+                return None   # a material is neither sold by a vendor nor listed here
+            materials.append((name, count, price, from_vendor))
+        return craft_signal(levels, hist, materials, f[4], PROFESSIONS.get(f[3]),
+                            vendor.get(variant_id, (None, None))[0], is_commodity, fees, tun)
+
+    def keep(variant_id: int, sig) -> None:
+        signal_rows.append((
+            house_id, variant_id, sig.strategy, sig.buy_qty, sig.buy_max_price, sig.buy_cost,
+            sig.sell_price, sig.profit, sig.roi, sig.days_to_sell, sig.risk_score, sig.risk_level,
+            json.dumps(sig.reasons), sig.list_hours,
+        ))
 
     market_rows, signal_rows = [], []
     empty = build_history([], span_hours)
-    for variant_id, (is_commodity, levels, n_listings) in load_ladders(conn, house_id).items():
+    for variant_id, (is_commodity, levels, n_listings) in ladders.items():
         hist = history.get(variant_id, empty)
         market_rows.append((
             house_id, variant_id, is_commodity, levels[0][0], market_price(levels, tun.market_fraction),
@@ -100,11 +171,27 @@ def analyse_house(conn: sqlite3.Connection, house_id: int, settings: Settings) -
         vendor_price, source = vendor.get(variant_id, (None, None))
         verified = bool(source and "forever" in source)
         for sig in evaluate(levels, hist, vendor_price, verified, bool(is_commodity), fees, tun):
-            signal_rows.append((
-                house_id, variant_id, sig.strategy, sig.buy_qty, sig.buy_max_price, sig.buy_cost,
-                sig.sell_price, sig.profit, sig.roi, sig.days_to_sell, sig.risk_score, sig.risk_level,
-                json.dumps(sig.reasons), sig.list_hours,
-            ))
+            keep(variant_id, sig)
+        if not makes_things:
+            continue
+        sig = craft(variant_id, levels, hist, bool(is_commodity))
+        if sig:
+            keep(variant_id, sig)
+        _, quality, item_class, level = item_of.get(variant_id, (None, None, None, None))
+        breaks_into = disenchant_yield(quality, item_class, level)
+        if breaks_into:
+            sig = disenchant_signal(
+                levels, [(material_name(m), units, sale_value(m)) for m, units in breaks_into], fees, tun)
+            if sig:
+                keep(variant_id, sig)
+
+    # Craftable items with a sales history here but nothing listed right now: an open goal.
+    for item_id in facts if makes_things else ():
+        variant_id = base_variant.get(item_id)
+        if variant_id in history and variant_id not in ladders:
+            sig = craft(variant_id, [], history[variant_id], False)
+            if sig:
+                keep(variant_id, sig)
 
     conn.execute("DELETE FROM market WHERE house_id = ?", (house_id,))
     conn.execute("DELETE FROM signals WHERE house_id = ?", (house_id,))

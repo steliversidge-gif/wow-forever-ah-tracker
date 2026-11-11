@@ -70,9 +70,15 @@ function riskBadge(level) {
 const PLAY = {
   VENDOR: 'Sell to a vendor', FLIP: 'Relist at the next price up', DIP: 'Hold for recovery',
   EXPORT: 'Buy here, list on Blackwater for the other faction',
+  CRAFT: 'Buy the materials, make it, list it',
+  DISENCHANT: 'Buy it, disenchant it, sell the materials',
 };
-const sellCell = s => money(s.sell_price) + (s.strategy === 'VENDOR' ? '' : `<span class="why">${
+const G = { q: '', how: '', sort: 'gold', minPrice: '' };                                  // farm filters
+const sellCell = s => money(s.sell_price) + (s.strategy === 'VENDOR' ? ''
+  : s.strategy === 'DISENCHANT' ? '<span class="why">in materials</span>' : `<span class="why">${
   [s.strategy === 'EXPORT' ? 'on Blackwater' : '', s.list_hours ? `list ${s.list_hours}h` : ''].filter(Boolean).join(' · ')}</span>`);
+const buyCell = s => num(s.buy_qty) + (s.strategy === 'CRAFT' ? '<span class="why">to make</span>' : '');
+const payCell = s => money(s.buy_max_price) + (s.strategy === 'CRAFT' ? '<span class="why">materials each</span>' : '');
 
 // ---------------------------------------------------------------- buy list --
 async function viewBuy() {
@@ -81,7 +87,8 @@ async function viewBuy() {
     <h1>Buy list — ${esc(houseLabel(h))}</h1>
     <p class="lead">Each row is one trade: what to buy in this auction house, the most to pay per unit,
       what to relist it for, and the profit after the house cut. EXPORT rows are bought here and listed on
-      Blackwater instead. Risk reflects how fast the item sells, how much history backs the estimate,
+      Blackwater instead; CRAFT rows are made from materials bought here; DISENCHANT rows are gear worth more as
+      enchanting materials. Risk reflects how fast the item sells, how much history backs the estimate,
       and where the price is heading.</p>
     <div class="filters">
       <label>Budget (gold)<input id="f-budget" type="number" min="0" step="1" placeholder="any" value="${esc(F.budget)}"></label>
@@ -90,7 +97,8 @@ async function viewBuy() {
         <option value="HIGH">Any</option><option value="MEDIUM">Medium or lower</option>
         <option value="LOW">Low or none</option><option value="NONE">None (vendor only)</option></select></label>
       <label>Play<select id="f-play"><option value="">All</option><option value="VENDOR">Vendor</option>
-        <option value="FLIP">Flip</option><option value="DIP">Dip</option><option value="EXPORT">Export</option></select></label>
+        <option value="FLIP">Flip</option><option value="DIP">Dip</option><option value="EXPORT">Export</option>
+        <option value="CRAFT">Craft</option><option value="DISENCHANT">Disenchant</option></select></label>
       <label>Sort by<select id="f-sort"><option value="profit">Profit</option><option value="roi">Return</option>
         <option value="risk">Lowest risk</option><option value="speed">Fastest sale</option></select></label>
       <label>Search<input id="f-q" type="search" placeholder="item name" value="${esc(F.q)}"></label>
@@ -128,7 +136,7 @@ async function viewBuy() {
       <tbody>${rows.map(s => `<tr>
         <td class="item">${itemLink(s)}<span class="why">${esc(s.reasons.join(' · '))}</span></td>
         <td><span class="play" title="${esc(PLAY[s.strategy])}">${s.strategy}</span></td>
-        <td class="num">${num(s.buy_qty)}</td><td class="num">${money(s.buy_max_price)}</td>
+        <td class="num">${buyCell(s)}</td><td class="num">${payCell(s)}</td>
         <td class="num">${money(s.buy_cost)}</td><td class="num">${sellCell(s)}</td>
         <td class="num"><b>${money(s.profit)}</b></td><td class="num">${pct(s.roi)}</td>
         <td class="num">${sellsIn(s.days_to_sell)}</td><td>${riskBadge(s.risk_level)}</td></tr>`).join('')}
@@ -181,6 +189,55 @@ async function viewMarket() {
   draw();
 }
 
+// -------------------------------------------------------------------- farm --
+// What is worth going out to get and posting: no buying involved.
+async function viewFarm() {
+  const h = houseMeta(S.houseId), d = await loadHouse(S.houseId);
+  const known = d.items.filter(x => x.how).length;
+  const ways = [...new Set(d.items.filter(x => x.farmable && x.how).flatMap(x => x.how.split(', ')))].sort();
+  view.innerHTML = `
+    <h1>Farm — ${esc(houseLabel(h))}</h1>
+    <p class="lead">Items you can go and get, ranked by how much gold the market pays out for them each day
+      (typical price times estimated daily sales). "Days of stock" is what is listed against what sells:
+      a low number means the market is hungry. Post at the cheapest current price: at one price the newest
+      listing sells first. ${known < d.items.length * 0.8 ? `<b>How items are obtained is still being looked up</b>
+      (${num(known)} of ${num(d.items.length)} known so far; a batch is added every hour).` : ''}</p>
+    <div class="filters">
+      <label>Search<input id="g-q" type="search" placeholder="item name" value="${esc(G.q)}"></label>
+      <label>How you get it<select id="g-how"><option value="">Any</option>${ways.map(w => `<option>${esc(w)}</option>`).join('')}</select></label>
+      <label>Worth at least (silver)<input id="g-min" type="number" min="0" step="1" placeholder="any" value="${esc(G.minPrice)}"></label>
+      <label>Sort by<select id="g-sort"><option value="gold">Gold paid out per day</option><option value="price">Highest price</option>
+        <option value="sold">Most sold per day</option><option value="stock">Fewest days of stock</option></select></label>
+    </div><div id="g-out"></div>`;
+  $('#g-how').value = G.how; $('#g-sort').value = G.sort;
+  const price = x => x.ref_price || x.market_price;
+  const gold = x => (x.sold_per_day || 0) * price(x);
+  const stock = x => x.sold_per_day ? x.quantity / x.sold_per_day : null;
+  const draw = () => {
+    const q = G.q.trim().toLowerCase(), min = Number(G.minPrice || 0) * 100;
+    let rows = d.items.filter(x => x.farmable && x.sold_per_day > 0 && price(x) >= min && !x.name.includes('[variant')
+      && (!q || x.name.toLowerCase().includes(q)) && (!G.how || (x.how || '').split(', ').includes(G.how)));
+    const sorters = {
+      gold: (a, b) => gold(b) - gold(a), price: (a, b) => price(b) - price(a),
+      sold: (a, b) => b.sold_per_day - a.sold_per_day, stock: (a, b) => (stock(a) ?? 1e9) - (stock(b) ?? 1e9) || gold(b) - gold(a),
+    };
+    rows.sort(sorters[G.sort]);
+    const total = rows.length; rows = rows.slice(0, 300);
+    $('#g-out').innerHTML = total ? `<p class="muted">${num(total)} item${total === 1 ? '' : 's'}${total > 300 ? ' (showing 300)' : ''}</p>
+      <div class="table-wrap"><table><thead><tr><th>Item</th><th>How you get it</th><th class="num">Post at</th>
+      <th class="num">Typical</th><th class="num">Trend / day</th><th class="num">Sold / day</th>
+      <th class="num">Gold paid out / day</th><th class="num">Days of stock</th></tr></thead><tbody>${rows.map(x => `<tr>
+      <td class="item">${itemLink(x)}</td><td>${esc(x.how)}</td><td class="num">${money(x.min_price)}</td>
+      <td class="num">${money(x.ref_price)}</td><td class="num">${pct(x.trend_per_day, true)}</td>
+      <td class="num">${num(x.sold_per_day, 1)}</td><td class="num">${money(gold(x))}</td>
+      <td class="num">${stock(x) == null ? '–' : num(stock(x), 1)}</td></tr>`).join('')}</tbody></table></div>`
+      : `<div class="note">${h.n_snaps < 7 ? 'Still collecting: sales rates need about 6 hours of snapshots.' : 'Nothing matches these filters.'}</div>`;
+  };
+  const bind = (id, key) => $(id).addEventListener('input', e => { G[key] = e.target.value; draw(); });
+  bind('#g-q', 'q'); bind('#g-how', 'how'); bind('#g-min', 'minPrice'); bind('#g-sort', 'sort');
+  draw();
+}
+
 // -------------------------------------------------------------------- item --
 async function viewItem(variantId) {
   const h = houseMeta(S.houseId), d = await loadHouse(S.houseId);
@@ -200,8 +257,11 @@ async function viewItem(variantId) {
       · <a href="https://www.wowhead.com/forever/item=${x.item_id}" target="_blank" rel="noopener">Wowhead</a>
       · ${esc(houseLabel(h))}</p>
     ${sigs.map(s => `<div class="advice">
-      <p><b>Buy ${num(s.buy_qty)}</b> at up to <b>${money(s.buy_max_price)}</b> each (${money(s.buy_cost)} in total).
-        ${s.strategy === 'VENDOR' ? `Sell to a vendor for <b>${money(s.sell_price)}</b> each.`
+      <p>${s.strategy === 'CRAFT'
+          ? `<b>Make ${num(s.buy_qty)}</b> for about <b>${money(s.buy_max_price)}</b> each in materials (${money(s.buy_cost)} in total).`
+          : `<b>Buy ${num(s.buy_qty)}</b> at up to <b>${money(s.buy_max_price)}</b> each (${money(s.buy_cost)} in total).`}
+        ${s.strategy === 'DISENCHANT' ? `Disenchant them: each gives about <b>${money(s.sell_price)}</b> of materials on average.` :
+          s.strategy === 'VENDOR' ? `Sell to a vendor for <b>${money(s.sell_price)}</b> each.`
           : s.strategy === 'EXPORT' ? `List on the Blackwater house at <b>${money(s.sell_price)}</b> each${s.list_hours ? ` for ${s.list_hours}h` : ''}.`
           : `Relist at <b>${money(s.sell_price)}</b> each${s.list_hours ? ` for ${s.list_hours}h` : ''}.`}
         Expected profit <b>${money(s.profit)}</b> (${pct(s.roi)}) after fees.</p>
@@ -493,6 +553,7 @@ async function render() {
     } else if (route === 'market') await viewMarket();
     else if (route === 'item') await viewItem(Number(arg));
     else if (route === 'cross') await viewCross();
+    else if (route === 'farm') await viewFarm();
     else if (route === 'status') viewStatus();
     else await viewBuy();
   } catch (err) {

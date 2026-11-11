@@ -421,3 +421,70 @@ def test_scorecard_logs_once_a_day_and_scores_when_the_window_closes(tmp_path):
     assert s["rows"] == [{"strategy": "FLIP", "risk_level": "LOW", "checked": 1, "on_time": 1, "late": 0,
                           "missed": 0, "enough_buyers": 1}]
     conn.close()
+
+
+# -- crafting, disenchanting, sources ---------------------------------------------
+def test_parse_wowhead_facts():
+    from forever_ah.blizzard import parse_wowhead_facts
+
+    xml = ('<wowhead><item id="6533"><name><![CDATA[Aquadynamic Fish Attractor]]></name>'
+           '<json><![CDATA["id":6533,"source":[1,2,5],"sourcemore":[{"c":11,"n":"x","s":202,"t":6,"ti":9271},{"n":"Rack","t":2}]]]></json>'
+           '<jsonEquip><![CDATA["buyprice":250,"sellprice":62]]></jsonEquip>'
+           '<createdBy><spell id="9271" name="Aquadynamic Fish Attractor" icon="i" minCount="3" maxCount="3">'
+           '<reagent id="2841" name="Bronze Bar" quality="1" icon="i" count="2" />'
+           '<reagent id="6530" name="Nightcrawlers" quality="1" icon="i" count="1" /></spell></createdBy></item></wowhead>')
+    f = parse_wowhead_facts(xml)
+    assert f["sources"] == [1, 2, 5] and f["buy_price"] == 250 and f["skill"] == 202 and f["makes"] == 3
+    assert f["reagents"] == [[2841, 2, "Bronze Bar"], [6530, 1, "Nightcrawlers"]]
+    plain = parse_wowhead_facts('<wowhead><item id="2770"><name><![CDATA[Copper Ore]]></name>'
+                                '<json><![CDATA["id":2770,"source":[2,19]]]></json></item></wowhead>')
+    assert plain["sources"] == [2, 19] and plain["reagents"] is None and plain["buy_price"] is None
+    assert parse_wowhead_facts("<wowhead><error>Item not found!</error></wowhead>") is None
+
+
+def test_sources_and_disenchant_table():
+    from forever_ah.professions import G_ASTRAL, L_ASTRAL, S_GLIMMERING, S_GLOWING, STRANGE, disenchant_yield, how_obtained, is_farmable
+
+    assert how_obtained([2, 19]) == "Mining, Drops" and is_farmable([2, 19])
+    assert how_obtained([1]) == "Crafted" and not is_farmable([1]) and not is_farmable([5])
+    assert how_obtained(None) is None and how_obtained([]) is None
+    armour = dict(disenchant_yield("Uncommon", "Armor", 24))
+    weapon = dict(disenchant_yield("Uncommon", "Weapon", 24))
+    assert armour == {STRANGE: 0.75 * 5.0, L_ASTRAL: 0.20 * 1.5, S_GLIMMERING: 0.05}
+    assert weapon[L_ASTRAL] > armour[L_ASTRAL] and weapon[STRANGE] < armour[STRANGE]   # weapons favour essence
+    assert disenchant_yield("Rare", "Armor", 33) == [(S_GLOWING, 1.0)]
+    assert G_ASTRAL in dict(disenchant_yield("Uncommon", "Armor", 28))
+    assert disenchant_yield("Common", "Armor", 24) == [] and disenchant_yield("Uncommon", "Trade Goods", 24) == []
+    assert disenchant_yield("Uncommon", "Armor", None) == [] and disenchant_yield("Uncommon", "Armor", 3) == []
+
+
+def test_craft_signal():
+    from forever_ah.signals import craft_signal
+
+    hist = levelled(sold={2000: 40}, sold_per_day=40.0, total_sold=280, ref_price=2000)
+    mats = [("Bronze Bar", 5, 100, False), ("Weak Flux", 4, 25, True)]        # 6s per craft
+    sig = craft_signal([(2000, 3)], hist, mats, 1.0, "Blacksmithing", 500, False, FEES, TUN)
+    assert sig.strategy == "CRAFT" and sig.sell_price == 2000                 # match the cheapest listing
+    assert sig.buy_qty == 20 and sig.buy_max_price == 600 and sig.buy_cost == 12000   # capped at 20 crafts
+    assert sig.reasons[0] == "Blacksmithing: 5x Bronze Bar (1s), 4x Weak Flux (25c at a vendor)"
+    assert sig.profit > 20 * (2000 * 0.95 - 600) - 2000
+    three = craft_signal([(2000, 3)], hist, mats, 3.0, None, 500, False, FEES, TUN)
+    assert three.buy_max_price == 200 and "makes 3" in three.reasons[0]
+    assert craft_signal([(500, 3)], hist, mats, 1.0, None, 500, False, FEES, TUN) is None       # sells below cost
+    assert craft_signal([], hist, mats, 1.0, None, 500, False, FEES, TUN).sell_price == 2000    # none listed: typical price
+    quiet = levelled(sold_per_day=0.5, total_sold=1)
+    assert craft_signal([(2000, 3)], quiet, mats, 1.0, None, 500, False, FEES, TUN) is None     # no proof it sells
+
+
+def test_disenchant_signal():
+    from forever_ah.signals import disenchant_signal
+
+    mats = [("Strange Dust", 3.75, 200), ("Lesser Astral Essence", 0.3, 1000), ("Small Glimmering Shard", 0.05, None)]
+    # worth 10s 50c in materials; 9s 97c after the cut; buy at up to 8s 31c (20% margin)
+    sig = disenchant_signal([(300, 2), (800, 3), (900, 5)], mats, FEES, TUN)
+    assert sig.strategy == "DISENCHANT" and sig.sell_price == 1050
+    assert (sig.buy_qty, sig.buy_max_price, sig.buy_cost) == (5, 800, 3000)
+    assert sig.profit == int(5 * 1050 * 0.95) - 3000 and sig.risk_level == "LOW"
+    assert disenchant_signal([(900, 5)], mats, FEES, TUN) is None
+    no_dust_price = [("Strange Dust", 3.75, None), ("Lesser Astral Essence", 0.3, 1000)]
+    assert disenchant_signal([(10, 5)], no_dust_price, FEES, TUN) is None    # cannot value it without its main material

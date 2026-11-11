@@ -13,11 +13,12 @@ Pages. No server, no home PC left on, nothing to pay for.
 |---|---|
 | **Buy list** | One row per trade: how many to buy, the most to pay, what to sell each for, profit after the house cut, how long it should take to sell, and a risk rating with the reasons behind it. Filter by budget, minimum profit, risk and play. |
 | **Market** | Every listed item with its cheapest price, typical price, trend and estimated sales per day. Use it to price things you want to sell. |
+| **Farm** | Items you can go and get (herbs, ore, skins, fish, drops), ranked by how much gold the market pays out for them a day, with days of stock on sale. No buying involved. |
 | **Item page** | Price history, estimated sales, and the order book with the running cost of buying it out. |
 | **Cross-faction** | Every EXPORT trade in both directions: buy in one faction's house, list on Blackwater for the other faction. |
 | **Status** | Collector health, the scorecard (did past recommendations work?), when things sell by hour of day, the measured base rates, and the one-off "which house is mine?" setup. |
 
-### The four plays
+### The six plays
 
 - **VENDOR** – listed below what an NPC vendor pays. Buy it, vendor it. No market risk.
 - **FLIP** – the cheapest listings sit well under the next price up. Buy them, relist at
@@ -25,6 +26,13 @@ Pages. No server, no home PC left on, nothing to pay for.
   sells first, so matching beats undercutting.
 - **DIP** – the whole market is 25%+ under its typical price. Buy cheap, relist near
   typical. Slower, and it depends on the price recovering.
+- **CRAFT** – buy the materials, make the item, list it at the cheapest current price.
+  Recipes come from Wowhead's Forever database; materials are priced at this house's market
+  price, or the vendor price for everyday vendor-only supplies. The "Buy" and "Pay up to"
+  columns show how many to make and the material cost of each.
+- **DISENCHANT** – gear listed for less than the enchanting materials it breaks into (with
+  a 20% margin). Needs an enchanter. It uses the original game's disenchant table, which
+  is not confirmed for Forever: test a few pieces before buying many.
 - **EXPORT** – buy in your faction's house and list on the neutral Blackwater house, where
   the other faction can buy it. Needs all three houses confirmed in `config.toml`. A trade
   is only suggested when the item has actually been selling on Blackwater (about 6 hours
@@ -135,6 +143,11 @@ copy .env.example .env        # then add your Blizzard client id and secret
 After changing `config.toml` locally, use `forever-ah run --reanalyse`.
 
 ## Known limits
+
+- **Recipes and item sources arrive slowly.** They are looked up on Wowhead one item at a
+  time, about 120 an hour, most-traded first, because Wowhead blocks faster reading. The
+  Craft play and the Farm page fill in over the first two to three days. Wowhead is
+  unofficial: if it stops answering, those two features stop growing and nothing else breaks.
 
 - **The API is undocumented and a week old.** Endpoints were verified on 2026-11-11 and
   may change without notice. If the collector starts failing, look at

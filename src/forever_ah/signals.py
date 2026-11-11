@@ -10,6 +10,10 @@ FLIP    The cheapest listings sit well under the next price up. Buy them and
         you at the front without giving away a copper.
 DIP     The whole market is well below its typical price. Buy the cheap units
         and relist near typical. Slower and riskier: it needs the price to recover.
+CRAFT   Buy the materials, make the item, list it. Priced at the cheapest
+        current listing (or the typical price when none is listed).
+DISENCHANT  Gear listed for less than the enchanting materials it breaks into.
+        Buy it, disenchant it, sell the materials.
 EXPORT  Buy in a faction house and list on the neutral Blackwater house, where
         the other faction can buy it. Only suggested for items that have
         actually been selling on Blackwater, priced no higher than the buyers
@@ -438,6 +442,70 @@ def export_signal(levels: list[Level], dest_levels: list[Level], dest_hist: Hist
     reasons.append(f"Deposit at stake: {format_money(deposit)} per {sig.list_hours}h listing")
     return replace(sig, risk_score=score, risk_level=_risk_level(score),
                    reasons=reasons + sig.reasons + extra)
+
+
+def craft_signal(levels: list[Level], hist: History, materials: list[tuple[str, int, int, bool]],
+                 makes: float, profession: str | None, vendor: int | None, is_commodity: bool,
+                 fees: HouseFees, tun: Tuning) -> Signal | None:
+    """Make the item and list it. materials: (name, count per craft, unit price, bought from a vendor).
+
+    `levels` is the crafted item's own order book (may be empty). The buy
+    columns of the signal describe the materials: quantity = units to make,
+    price = material cost per unit made.
+    """
+    if not materials or not makes or not hist.sold_per_day or hist.total_sold < tun.export_min_sold:
+        return None
+    proven = hist.ref_price if hist.n_snaps >= tun.min_history_snaps else None
+    ceilings = [c for c in (levels[0][0] if levels else None, proven) if c]
+    if not ceilings:
+        return None
+    target = int(min(ceilings))                      # match the cheapest: the newest listing sells first
+    rate, share, pressure = demand_at(hist, target)
+    if rate <= 0:
+        return None
+    cost_each = sum(count * price for _, count, price, _ in materials) / makes
+    qty = min(max(1, int(rate * tun.horizon_days)), tun.craft_max)
+    sig = _finish("CRAFT", qty, math.ceil(cost_each), math.ceil(cost_each * qty), target, qty / rate, hist,
+                  vendor, is_commodity, fees, tun, share, pressure)
+    if sig is None:
+        return None
+    parts = ", ".join(f"{count}x {name} ({format_money(price)}{' at a vendor' if from_vendor else ''})"
+                      for name, count, price, from_vendor in materials)
+    recipe = f"{profession or 'Crafted'}: {parts}" + (f" makes {makes:g}" if makes != 1 else "")
+    return replace(sig, reasons=[recipe] + sig.reasons)
+
+
+def disenchant_signal(levels: list[Level], materials: list[tuple[str, float, int | None]],
+                      fees: HouseFees, tun: Tuning) -> Signal | None:
+    """Buy gear listed below what it disenchants into. materials: (name, average units, unit price or None).
+
+    The sell price of the signal is the average material value of one piece.
+    """
+    if not levels or not materials:
+        return None
+    if any(price is None and units >= 0.1 for _, units, price in materials):
+        return None                                  # a main material has no price here: cannot value it
+    worth = sum(units * price for _, units, price in materials if price)
+    net = worth * (1 - fees.cut)
+    most_to_pay = net / (1 + tun.disenchant_margin)
+    qty = cost = max_price = 0
+    for price, q in levels:
+        if price > most_to_pay or qty >= tun.disenchant_max:
+            break
+        take = min(q, tun.disenchant_max - qty)
+        qty += take
+        cost += take * price
+        max_price = price
+    profit = math.floor(qty * net) - cost
+    if qty == 0 or profit < tun.min_profit:
+        return None
+    reasons = [
+        "Disenchants into about " + ", ".join(f"{units:.2g}x {name}" for name, units, _ in materials) + " each",
+        "Needs an enchanter; results vary piece to piece",
+        "Uses the original game's disenchant table: test a few before buying many",
+    ]
+    return Signal("DISENCHANT", qty, max_price, cost, round(worth), profit, round(profit / cost, 4), 0.25,
+                  20, "LOW", reasons, fees.listing_hours)
 
 
 def evaluate(levels: list[Level], hist: History, vendor: int | None, vendor_verified: bool,

@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 
-from forever_ah.blizzard import WOWHEAD_CLASSES, BlizzardClient, http_date_to_utc
+from forever_ah.blizzard import WOWHEAD_CLASSES, BlizzardClient, http_date_to_utc, parse_wowhead_facts
 from forever_ah.lifecycle import RateCounts, Rates, rates_from_counts
 from forever_ah.pricing import squash_levels
 from forever_ah.config import FACTIONS, Settings
@@ -248,6 +250,57 @@ def resolve_items(conn: sqlite3.Connection, client: BlizzardClient, limit: int =
                  d.get("level"), d.get("required_level"), d.get("sell_price"), source, now),
             )
             done += 1
+    conn.commit()
+    return done
+
+
+def resolve_facts(conn: sqlite3.Connection, client: BlizzardClient, limit: int = 120,
+                  pause: float = 0.5) -> int:
+    """Fetch from Wowhead how items are obtained and what crafted ones are made of.
+
+    One request per item, ever (misses are retried after a day). Wowhead
+    blocks an address that asks too fast (a burst of ~800 lookups got one
+    blocked), so each run does a small batch, one at a time with a pause, and
+    stops at the first refusals; the first full pass takes two to three days.
+    Materials of known recipes go first, then auctioned items, most traded first.
+    """
+    retry_before = (datetime.now(UTC) - timedelta(days=1)).strftime(TIME_FMT)
+    known = {r[0]: (r[1], r[2]) for r in conn.execute("SELECT item_id, ok, fetched_at FROM item_facts")}
+
+    def due(item_id: int) -> bool:
+        seen = known.get(item_id)
+        return seen is None or (not seen[0] and seen[1] < retry_before)
+
+    todo: list[int] = []
+    for (reagents,) in conn.execute("SELECT reagents FROM item_facts WHERE reagents IS NOT NULL"):
+        todo.extend(r[0] for r in json.loads(reagents) if due(r[0]))
+    todo.extend(r[0] for r in conn.execute(
+        "SELECT v.item_id FROM variants v LEFT JOIN market m ON m.variant_id = v.variant_id "
+        "GROUP BY v.item_id ORDER BY MAX(COALESCE(m.sold_per_day, 0) * m.market_price) DESC, v.item_id") if due(r[0]))
+    todo = list(dict.fromkeys(todo))[:limit]
+    if not todo:
+        return 0
+    log.info("Looking up %d item(s) on Wowhead...", len(todo))
+    now = utcnow()
+    done = 0
+    refused = 0
+    for item_id in todo:
+        xml = client.wowhead_xml(item_id)
+        if xml is None:
+            refused += 1
+            if refused >= 3:   # throttled or unreachable: leave the rest for a later run
+                log.warning("Wowhead is refusing lookups; stopping after %d this run", done)
+                break
+            continue
+        refused = 0
+        f = parse_wowhead_facts(xml) or {}
+        conn.execute(
+            "INSERT OR REPLACE INTO item_facts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (item_id, f.get("name"), json.dumps(f["sources"]) if f.get("sources") else None, f.get("buy_price"),
+             f.get("skill"), f.get("spell_name"), f.get("makes"),
+             json.dumps(f["reagents"]) if f.get("reagents") else None, now, int(bool(f))))
+        done += 1
+        time.sleep(pause)
     conn.commit()
     return done
 

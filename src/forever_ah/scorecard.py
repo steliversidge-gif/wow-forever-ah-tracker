@@ -43,7 +43,7 @@ def log_signals(conn: sqlite3.Connection, settings: Settings) -> int:
     added = 0
     rows = conn.execute(
         "SELECT house_id, variant_id, strategy, buy_qty, sell_price, days_to_sell, risk_level "
-        "FROM signals WHERE strategy != 'VENDOR'").fetchall()
+        "FROM signals WHERE strategy NOT IN ('VENDOR', 'DISENCHANT')").fetchall()
     for house_id, variant_id, strategy, qty, sell_price, days, risk in rows:
         issued_at = latest.get(house_id)
         if not issued_at:

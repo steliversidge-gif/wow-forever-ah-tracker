@@ -37,6 +37,9 @@ class Tuning:
     min_profit: int = 100
     min_roi: float = 0.05
     export_min_sold: int = 3            # Blackwater sales seen before an EXPORT is suggested
+    craft_max: int = 20                 # most crafts of one recipe to suggest at a time
+    disenchant_max: int = 10            # most pieces of one item to suggest buying to disenchant
+    disenchant_margin: float = 0.20     # materials must be worth this much more than the price paid
     ladder_levels: int = 25             # order-book depth exported per item
 
 

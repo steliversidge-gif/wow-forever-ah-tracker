@@ -19,6 +19,7 @@ from pathlib import Path
 from forever_ah import scorecard
 from forever_ah.collector import measured_rates, tracked_houses, utcnow
 from forever_ah.config import Settings
+from forever_ah.professions import how_obtained, is_farmable
 
 log = logging.getLogger(__name__)
 HISTORY_CHUNKS = 32
@@ -29,7 +30,7 @@ NAME_SQL = ("COALESCE(i.name, 'Item #' || v.item_id) || "
 
 MARKET_COLS = ["variant_id", "item_id", "name", "quality", "item_class", "is_commodity", "min_price",
                "market_price", "quantity", "listings", "ref_price", "trend_per_day", "sold_per_day",
-               "total_sold", "n_snaps", "vendor_sell"]
+               "total_sold", "n_snaps", "vendor_sell", "how", "farmable"]
 
 
 def _write(path: Path, payload) -> None:
@@ -61,9 +62,11 @@ def export_house(conn: sqlite3.Connection, house_id: int, data_dir: Path, settin
     market = conn.execute(
         f"SELECT m.variant_id, v.item_id, {NAME_SQL}, i.quality, i.item_class, m.is_commodity, m.min_price, "
         "m.market_price, m.quantity, m.listings, m.ref_price, ROUND(m.trend_per_day, 4), "
-        "ROUND(m.sold_per_day, 2), m.total_sold, m.n_snaps, i.vendor_sell "
+        "ROUND(m.sold_per_day, 2), m.total_sold, m.n_snaps, i.vendor_sell, f.sources "
         "FROM market m JOIN variants v ON v.variant_id = m.variant_id "
-        "LEFT JOIN items i ON i.item_id = v.item_id WHERE m.house_id = ?", (house_id,)).fetchall()
+        "LEFT JOIN items i ON i.item_id = v.item_id LEFT JOIN item_facts f ON f.item_id = v.item_id "
+        "WHERE m.house_id = ?", (house_id,)).fetchall()
+    market = [(*r[:-1], how_obtained(s := json.loads(r[-1]) if r[-1] else None), int(is_farmable(s))) for r in market]
     signals = [
         {**dict(r), "reasons": json.loads(r["reasons"])}
         for r in conn.execute(

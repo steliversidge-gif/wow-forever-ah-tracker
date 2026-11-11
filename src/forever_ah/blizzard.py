@@ -10,6 +10,7 @@ Verified against the live API on 2026-11-11:
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import time
@@ -59,6 +60,37 @@ def parse_wowhead_item(xml: str) -> dict | None:
         "required_level": number("reqlevel"),
         "sell_price": number("sellprice"),
     }
+
+
+def parse_wowhead_facts(xml: str) -> dict | None:
+    """How an item is obtained and, if it is crafted, its recipe - from Wowhead's item XML."""
+    name = re.search(r"<name><!\[CDATA\[(.*?)\]\]></name>", xml, re.S)
+    if "<error>" in xml or not name:
+        return None
+    sources = re.search(r'"source":\[([\d,]*)\]', xml)
+    buy = re.search(r'"buyprice":(\d+)', xml)
+    facts = {
+        "name": name.group(1),
+        "sources": [int(x) for x in sources.group(1).split(",") if x] if sources else [],
+        "buy_price": int(buy.group(1)) if buy else None,
+        "skill": None, "spell_name": None, "makes": None, "reagents": None,
+    }
+    spell = re.search(r'<createdBy><spell id="(\d+)" name="([^"]*)"[^>]*?minCount="(\d+)" maxCount="(\d+)"[^>]*>(.*?)</spell>',
+                      xml, re.S)
+    if spell:
+        reagents = [[int(i), int(c), n] for i, n, c in
+                    re.findall(r'<reagent id="(\d+)" name="([^"]*)"[^>]*?count="(\d+)"', spell.group(5))]
+        if reagents:
+            skill = re.search(r'"s":(\d+),"t":6,"ti":' + spell.group(1), xml)
+            facts.update(spell_name=_unescape(spell.group(2)), makes=(int(spell.group(3)) + int(spell.group(4))) / 2,
+                         reagents=[[i, c, _unescape(n)] for i, c, n in reagents],
+                         skill=int(skill.group(1)) if skill else None)
+    return facts
+
+
+def _unescape(text: str) -> str:
+    return (text.replace("&quot;", '"').replace("&apos;", "'").replace("&#39;", "'")
+            .replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&"))
 
 
 class BlizzardError(RuntimeError):
@@ -162,11 +194,17 @@ class BlizzardClient:
         Unofficial, so any failure just leaves the item unnamed. Uses a plain
         request, never the session's Blizzard token.
         """
+        xml = self.wowhead_xml(item_id)
+        data = parse_wowhead_item(xml) if xml else None
+        return (data, "wowhead-forever") if data else (None, None)
+
+    @staticmethod
+    def wowhead_xml(item_id: int) -> str | None:
+        """Wowhead's XML for one item, or None if it could not be fetched."""
         try:
             r = requests.get(WOWHEAD_ITEM_URL.format(item_id=item_id), timeout=20,
                              headers={"User-Agent": "forever-ah-tracker"})
-            data = parse_wowhead_item(r.text) if r.status_code == 200 else None
         except requests.RequestException as exc:
             log.debug("Wowhead lookup for item %s failed: %s", item_id, exc)
-            return None, None
-        return (data, "wowhead-forever") if data else (None, None)
+            return None
+        return r.text if r.status_code == 200 else None
