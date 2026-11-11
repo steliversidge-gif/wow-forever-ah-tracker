@@ -10,7 +10,7 @@ from itertools import groupby
 
 from forever_ah.config import FACTIONS, Settings
 from forever_ah.pricing import junk_ceiling, market_price
-from forever_ah.professions import PROFESSIONS, VENDOR_ONLY, disenchant_yield
+from forever_ah.professions import COOLDOWN_DAYS, PROFESSIONS, VENDOR_ONLY, disenchant_yield
 from forever_ah.signals import (
     build_history,
     craft_signal,
@@ -164,7 +164,8 @@ def analyse_house(conn: sqlite3.Connection, house_id: int, settings: Settings) -
                 return None   # a material is neither sold by a vendor nor listed here
             materials.append((name, count, price, from_vendor))
         return craft_signal(levels, hist, materials, f[4], PROFESSIONS.get(f[3]),
-                            vendor.get(variant_id, (None, None))[0], is_commodity, fees, tun)
+                            vendor.get(variant_id, (None, None))[0], is_commodity, fees, tun,
+                            COOLDOWN_DAYS.get(item_id))
 
     def keep(variant_id: int, sig) -> None:
         signal_rows.append((

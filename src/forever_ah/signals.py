@@ -456,7 +456,7 @@ def export_signal(levels: list[Level], dest_levels: list[Level], dest_hist: Hist
 
 def craft_signal(levels: list[Level], hist: History, materials: list[tuple[str, int, int, bool]],
                  makes: float, profession: str | None, vendor: int | None, is_commodity: bool,
-                 fees: HouseFees, tun: Tuning) -> Signal | None:
+                 fees: HouseFees, tun: Tuning, cooldown_days: int | None = None) -> Signal | None:
     """Make the item and list it. materials: (name, count per craft, unit price, bought from a vendor).
 
     `levels` is the crafted item's own order book (may be empty). The buy
@@ -482,7 +482,12 @@ def craft_signal(levels: list[Level], hist: History, materials: list[tuple[str, 
     parts = ", ".join(f"{count}x {name} ({format_money(price)}{' at a vendor' if from_vendor else ''})"
                       for name, count, price, from_vendor in materials)
     recipe = f"{profession or 'Crafted'}: {parts}" + (f" makes {makes:g}" if makes != 1 else "")
-    return replace(sig, reasons=[recipe] + sig.reasons)
+    notes = [recipe]
+    if cooldown_days and sig.buy_qty > 1:
+        every = "day" if cooldown_days == 1 else f"{cooldown_days} days"
+        notes.append(f"Cooldown in the original game: one per character every {every}, "
+                     f"so {sig.buy_qty} needs several characters")
+    return replace(sig, reasons=notes + sig.reasons)
 
 
 def disenchant_signal(levels: list[Level], materials: list[tuple[str, float, int | None]],
