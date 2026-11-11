@@ -47,10 +47,52 @@ def test_commodity_gone_while_cheaper_survives_is_cancelled_not_sold():
     assert d.flows[1].sold_qty == 0 and d.flows[1].cancelled_qty == 10
 
 
-def test_cheapest_commodity_gone_is_sold():
+def test_cheapest_commodity_gone_is_probably_sold():
+    # Nothing proves it: it was at the front and could not have expired, so it
+    # counts as sold less the small chance it was quietly withdrawn.
     prev = {1: L(price=100), 2: L(price=150)}
-    d = diff_snapshot(prev, {2: L(price=150)}, 1.0)
-    assert d.flows[1].sold_qty == 10 and d.flows[1].sold_value == 1000
+    f = diff_snapshot(prev, {2: L(price=150)}, 1.0).flows[1]
+    assert 8.5 < f.sold_qty < 9 and abs(f.sold_qty + f.cancelled_qty - 10) < 1e-9
+    assert abs(f.sold_value - f.sold_qty * 100) < 1e-9
+
+
+def test_stack_ahead_of_a_part_bought_one_was_certainly_sold():
+    prev = {1: L(price=100, left="SHORT"), 2: L(price=150, qty=10)}
+    f = diff_snapshot(prev, {2: L(price=150, qty=4)}, 1.0).flows[1]
+    assert f.sold_qty == 16 and f.sold_value == 10 * 100 + 6 * 150
+
+
+def test_newest_listing_at_a_price_sells_first():
+    # Same price: the higher auction id is newer and at the front of the queue.
+    older_gone = diff_snapshot({1: L(), 2: L()}, {2: L()}, 1.0).flows[1]
+    assert older_gone.sold_qty == 0 and older_gone.cancelled_qty == 10    # the newer one was untouched
+    newer_gone = diff_snapshot({1: L(), 2: L()}, {1: L()}, 1.0).flows[1]
+    assert newer_gone.sold_qty > 8
+    behind_part_bought = diff_snapshot({1: L(), 2: L()}, {2: L(qty=3)}, 1.0).flows[1]
+    assert behind_part_bought.sold_qty == 7                               # only the part-fill counts
+
+
+def test_identical_repost_is_not_a_sale():
+    d = diff_snapshot({1: L(commodity=0, price=5000, qty=1)}, {2: L(commodity=0, price=5000, qty=1)}, 1.0)
+    assert d.flows[1].sold_qty == 0 and d.flows[1].cancelled_qty == 1
+    # one fresh listing explains one disappearance, not two
+    two = diff_snapshot({1: L(commodity=0, price=5000, qty=1), 2: L(commodity=0, price=5000, qty=1)},
+                        {3: L(commodity=0, price=5000, qty=1)}, 1.0).flows[1]
+    assert 0 < two.sold_qty < 1 and two.cancelled_qty >= 1
+
+
+def test_listing_that_may_have_expired_counts_only_partly_as_sold():
+    from forever_ah.lifecycle import expiry_chance, sale_weight
+
+    assert expiry_chance("MEDIUM", 1.0) == 1 / 3 and expiry_chance("LONG", 1.0) == 0
+    assert expiry_chance("SHORT", 1.0) == 1
+    gear_long = sale_weight(L(commodity=0, qty=1, left="LONG"), 1.0)
+    gear_medium = sale_weight(L(commodity=0, qty=1, left="MEDIUM"), 1.0)
+    stack_medium = sale_weight(L(left="MEDIUM"), 1.0)
+    assert 0.6 < gear_long < 0.7          # gear rarely sells in a given hour; some of these are withdrawals
+    assert gear_medium < 0.15             # with under 2h left, expiry is far likelier than a sale
+    assert gear_medium < stack_medium < sale_weight(L(left="LONG"), 1.0)
+    assert sale_weight(L(left="SHORT"), 1.0) == 0
 
 
 def test_short_time_left_is_expired():
@@ -111,7 +153,9 @@ def test_flip_signal_buys_under_the_gap_and_caps_at_typical_price():
     hist = History(n_snaps=48, ref_price=1000, trend_per_day=0.0, cv=0.05, sold_per_day=50, total_sold=100)
     s = flip_signal([(500, 5), (2000, 100)], hist, vendor=10, is_commodity=True, fees=FEES, tun=TUN)
     assert s.buy_qty == 5 and s.buy_cost == 2500
-    assert s.sell_price == 1000                      # capped at typical, not 1999
+    assert s.sell_price == 1000                      # capped at typical, not 2000
+    cheap_gap = flip_signal([(500, 5), (900, 100)], hist, vendor=10, is_commodity=True, fees=FEES, tun=TUN)
+    assert cheap_gap.sell_price == 900               # match the next price: the newest listing sells first
     assert s.profit == int(5 * 1000 * 0.95) - 2500
     assert s.risk_level == "LOW"
 
@@ -194,8 +238,8 @@ def test_export_never_asks_more_than_buyers_pay_at_home():
     assert export(buyer_price=550) is None              # no margin left after the cut
 
 
-def test_export_undercuts_the_cheapest_blackwater_listing():
-    assert export(dest_levels=((800, 5),)).sell_price == 799
+def test_export_matches_the_cheapest_blackwater_listing():
+    assert export(dest_levels=((800, 5),)).sell_price == 800   # newest listing at a price sells first
 
 
 def test_export_needs_real_blackwater_sales():

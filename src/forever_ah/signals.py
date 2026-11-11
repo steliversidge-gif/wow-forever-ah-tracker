@@ -5,8 +5,9 @@ Three strategies inside ONE auction house, and one that crosses to Blackwater:
 VENDOR  Listings priced below what an NPC vendor pays. Buy, walk to a vendor,
         sell. No market risk at all.
 FLIP    The cheapest listings sit well under the next price up. Buy them and
-        relist just under that next price (never above the item's typical
-        price), so you are the cheapest seller again.
+        relist AT that next price (never above the item's typical price). At
+        one price the newest listing sells first, so matching the price puts
+        you at the front without giving away a copper.
 DIP     The whole market is well below its typical price. Buy the cheap units
         and relist near typical. Slower and riskier: it needs the price to recover.
 EXPORT  Buy in a faction house and list on the neutral Blackwater house, where
@@ -34,7 +35,7 @@ class History:
     trend_per_day: float | None = None  # +0.10 = rising 10% a day
     cv: float | None = None             # volatility: stdev / mean of hourly market prices
     sold_per_day: float | None = None   # units, inferred (see lifecycle.py)
-    total_sold: int = 0
+    total_sold: float = 0               # expected units: uncertain disappearances count in part
 
 
 @dataclass(frozen=True)
@@ -147,7 +148,7 @@ def assess_risk(strategy: str, days_to_sell: float, hist: History) -> tuple[int,
         reasons.append("Under 3 days of price history")
     if hist.total_sold < 10:
         score += 15
-        reasons.append(f"Few observed sales ({hist.total_sold})")
+        reasons.append(f"Few observed sales ({hist.total_sold:.0f})")
 
     if hist.cv is not None:
         if hist.cv > 0.5:
@@ -229,7 +230,7 @@ def flip_signal(levels: list[Level], hist: History, vendor: int | None, is_commo
         cost += price * q
         if qty > max_units:
             break  # buying part of a price level leaves the rest undercutting you
-        target = min(levels[i + 1][0] - 1, hist.ref_price)
+        target = min(levels[i + 1][0], hist.ref_price)   # match it: the newest listing sells first
         if target <= price:
             continue
         sig = _finish("FLIP", qty, price, cost, target, qty / hist.sold_per_day, hist,
@@ -260,7 +261,8 @@ def dip_signal(levels: list[Level], hist: History, vendor: int | None, is_commod
         max_price = price
     if qty == 0:
         return None
-    # Everything still listed under our relist price has to sell before ours does.
+    # Everything listed under our relist price has to sell before ours does
+    # (stock AT our price is behind us: the newest listing sells first).
     ahead = sum(q for p, q in levels if p < target) - qty
     days = (max(ahead, 0) + qty) / hist.sold_per_day
     return _finish("DIP", qty, max_price, cost, target, days, hist, vendor, is_commodity, fees, tun)
@@ -284,7 +286,7 @@ def export_signal(levels: list[Level], dest_levels: list[Level], dest_hist: Hist
     if not dest_sold_price and not buyer_price:
         return None
     ceilings = [c for c in (
-        dest_levels[0][0] - 1 if dest_levels else None,   # be the cheapest listing there
+        dest_levels[0][0] if dest_levels else None,       # match the cheapest there: newest sells first
         dest_sold_price,
         buyer_price - 1 if buyer_price else None,         # nobody pays more than at home
         dest_hist.ref_price if dest_hist.n_snaps >= tun.min_history_snaps else None,

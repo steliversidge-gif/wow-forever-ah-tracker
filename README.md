@@ -20,8 +20,9 @@ Pages. No server, no home PC left on, nothing to pay for.
 ### The four plays
 
 - **VENDOR** – listed below what an NPC vendor pays. Buy it, vendor it. No market risk.
-- **FLIP** – the cheapest listings sit well under the next price up. Buy them, relist just
-  under that next price (never above the item's typical price).
+- **FLIP** – the cheapest listings sit well under the next price up. Buy them, relist at
+  that next price (never above the item's typical price). At one price the newest listing
+  sells first, so matching beats undercutting.
 - **DIP** – the whole market is 25%+ under its typical price. Buy cheap, relist near
   typical. Slower, and it depends on the price recovering.
 - **EXPORT** – buy in your faction's house and list on the neutral Blackwater house, where
@@ -54,9 +55,14 @@ GitHub Actions (hourly)
 compares each snapshot with the last ([lifecycle.py](src/forever_ah/lifecycle.py)):
 
 1. A stackable listing whose quantity *shrank* was bought from. That is a certain sale.
-2. Stackables are bought cheapest-first, so a listing that vanished while a cheaper one
-   survived was cancelled or expired, not sold.
-3. A listing with more time left than the gap between snapshots cannot have expired.
+2. Stackables are bought cheapest first and, at one price, newest first. A stack that
+   vanished ahead of a part-bought one was sold; one that vanished behind a surviving
+   stack was cancelled or expired.
+3. A vanished listing with an identical fresh one (same item, quantity and price) was
+   reposted, not sold.
+4. A listing with more time left than the gap between snapshots cannot have expired. One
+   that could have expired counts only partly as a sale, weighted by measured base rates
+   (about a third of listings with 30 minutes to 2 hours left expire each hour).
 
 **Storage.** A listing is stored once while it is live and deleted when it closes; what
 happened to it is tallied into one summary row per item per snapshot. Seven days of
@@ -120,8 +126,9 @@ After changing `config.toml` locally, use `forever-ah run --reanalyse`.
 - **The API is undocumented and a week old.** Endpoints were verified on 2026-11-11 and
   may change without notice. If the collector starts failing, look at
   [blizzard.py](src/forever_ah/blizzard.py) first.
-- **Sales are estimates.** A one-off item that is cancelled with nothing left to compare
-  it to is counted as sold. Treat "sold per day" as a good guide, not a ledger.
+- **Sales are estimates.** Stackable goods are measured well. Gear is weaker: a lone
+  piece that vanishes counts as a fraction of a sale, using base rates measured on one
+  day of launch week. Treat "sold per day" as a good guide, not a ledger.
 - **Signals need history.** Vendor deals appear at once. Flips need 6 hourly snapshots and
   dips need 24; everything is rated riskier until about three days of data exist.
 - **Data is up to ~90 minutes old.** Blizzard publishes hourly and GitHub's scheduler can

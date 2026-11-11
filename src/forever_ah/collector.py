@@ -143,12 +143,12 @@ def ingest_house(conn: sqlite3.Connection, house_id: int, published_at: str, cur
             levels[0][0] if levels else None,
             market_price(levels, tun.market_fraction),
             sum(q for _, q in levels), len(pairs),
-            f.sold_qty if f else 0, f.sold_value if f else 0, f.cancelled_qty if f else 0,
-            f.expired_qty if f else 0, f.new_qty if f else 0,
+            round(f.sold_qty, 2) if f else 0, round(f.sold_value) if f else 0,
+            round(f.cancelled_qty, 2) if f else 0, round(f.expired_qty, 2) if f else 0, f.new_qty if f else 0,
         ))
     conn.executemany("INSERT INTO item_stats VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
     return {"snapshot_id": snapshot_id, "listings": len(curr), "new": len(diff.new),
-            "gone": len(diff.gone), "sold_units": sum(f.sold_qty for f in diff.flows.values()),
+            "gone": len(diff.gone), "sold_units": round(sum(f.sold_qty for f in diff.flows.values())),
             "gap_hours": gap_hours}
 
 

@@ -68,7 +68,7 @@ function riskBadge(level) {
   return `<span class="badge ${shape}"><i style="background:var(--${color})"></i>${label}</span>`;
 }
 const PLAY = {
-  VENDOR: 'Sell to a vendor', FLIP: 'Relist under the next price', DIP: 'Hold for recovery',
+  VENDOR: 'Sell to a vendor', FLIP: 'Relist at the next price up', DIP: 'Hold for recovery',
   EXPORT: 'Buy here, list on Blackwater for the other faction',
 };
 const sellCell = s => money(s.sell_price) + (s.strategy === 'EXPORT' ? '<span class="why">on Blackwater</span>' : '');
