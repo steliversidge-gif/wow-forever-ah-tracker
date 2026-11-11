@@ -26,6 +26,7 @@ class Fees:
 class Tuning:
     market_fraction: float = 0.15       # "market price" = mean of the cheapest 15% of units
     lookback_days: float = 7
+    junk_multiple: float = 5.0          # listings above 5x the going price are ignored as junk
     stats_retention_days: float = 7
     max_gap_hours: float = 3.0          # longer gaps between snapshots: outcomes are unknowable
     noncommodity_tolerance: float = 1.2 # gear sells up to 20% above the cheapest survivor

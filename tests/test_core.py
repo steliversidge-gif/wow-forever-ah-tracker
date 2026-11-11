@@ -488,3 +488,21 @@ def test_disenchant_signal():
     assert disenchant_signal([(900, 5)], mats, FEES, TUN) is None
     no_dust_price = [("Strange Dust", 3.75, None), ("Lesser Astral Essence", 0.3, 1000)]
     assert disenchant_signal([(10, 5)], no_dust_price, FEES, TUN) is None    # cannot value it without its main material
+
+
+def test_junk_listings_are_cut_at_a_multiple_of_the_going_price():
+    from forever_ah.pricing import junk_ceiling
+    cloth = [(100, 40), (110, 60), (150, 20), (10_000_000, 1)]
+    assert junk_ceiling(cloth, None, 5.0) == 500
+    # a market that has fallen keeps its old, higher prices: the typical price lifts the ceiling
+    assert junk_ceiling(cloth, 400, 5.0) == 2000
+    assert junk_ceiling([], None, 5.0) is None
+
+
+def test_sales_far_above_typical_are_not_counted():
+    points = [(float(t), 100, 2) for t in range(12)]
+    h = build_history(points, span_hours=12, sold_levels={100: 20, 100_000: 4}, level_days=0.5,
+                      junk_multiple=5.0)
+    assert h.sold_levels == ((100, 20),)
+    assert h.total_sold == 20
+    assert h.sold_per_day == 40

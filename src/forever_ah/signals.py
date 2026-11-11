@@ -105,7 +105,8 @@ def house_fees(fees: Fees, faction: str) -> HouseFees:
 
 def build_history(points: list[tuple[float, int | None, int]], span_hours: float,
                   min_span_hours: float = 6.0, sold_levels: dict | None = None,
-                  new_levels: dict | None = None, level_days: float | None = None) -> History:
+                  new_levels: dict | None = None, level_days: float | None = None,
+                  junk_multiple: float | None = None) -> History:
     """Summarise an item's hourly rows.
 
     points: (time in hours, market price or None, units sold), oldest first.
@@ -124,6 +125,15 @@ def build_history(points: list[tuple[float, int | None, int]], span_hours: float
 
     prices = [p for _, p in priced]
     ref = median(prices)
+    if junk_multiple and levels:
+        # A junk listing that ran out can look like a sale: discard "sales" far above the typical price.
+        kept = tuple((p, q) for p, q in levels["sold_levels"] if p <= ref * junk_multiple)
+        dropped = sum(q for _, q in levels["sold_levels"]) - sum(q for _, q in kept)
+        if dropped > 0:
+            levels["sold_levels"] = kept
+            total_sold = max(0.0, total_sold - dropped)
+            if sold_per_day is not None:
+                sold_per_day = total_sold / (span_hours / 24)
     mean = sum(prices) / len(prices)
     cv = None
     if len(prices) >= 3 and mean > 0:

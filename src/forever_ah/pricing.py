@@ -37,6 +37,20 @@ def market_price(levels: list[Level], fraction: float = 0.15) -> int | None:
     return round(value / taken)
 
 
+def junk_ceiling(levels: list[Level], typical: int | None, multiple: float,
+                 fraction: float = 0.15) -> float | None:
+    """The price above which a listing is junk: a wishful or joke price nobody will pay.
+
+    It is `multiple` times the item's going price, taken as the higher of the
+    current market price and the typical price. A mean-and-standard-deviation
+    rule does not work here: the junk itself inflates both, and with fewer
+    than 11 listings no price can ever sit 3 deviations out.
+    """
+    now = market_price(levels, fraction)
+    anchor = max(now or 0, typical or 0)
+    return anchor * multiple if anchor > 0 and multiple else None
+
+
 def median(values: list[float]) -> float | None:
     if not values:
         return None

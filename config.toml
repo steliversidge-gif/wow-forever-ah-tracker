@@ -31,6 +31,7 @@ listing_hours = 24
 
 [tuning]
 lookback_days = 7            # history used for "typical price" and sales per day
+junk_multiple = 5.0          # listings above 5x the going price are junk: ignored as stock, prices and sales
 stats_retention_days = 7     # hourly per-item history kept in the database
 horizon_days = 1.0           # never suggest buying more than this many days of sales
 dip_threshold = 0.25         # a "dip" is this far below the typical price

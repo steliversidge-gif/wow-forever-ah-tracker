@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 from itertools import groupby
 
 from forever_ah.config import FACTIONS, Settings
-from forever_ah.pricing import market_price
+from forever_ah.pricing import junk_ceiling, market_price
 from forever_ah.professions import PROFESSIONS, VENDOR_ONLY, disenchant_yield
 from forever_ah.signals import (
     build_history,
@@ -29,15 +29,28 @@ def _hours(ts: str) -> float:
     return datetime.strptime(ts, TIME_FMT).replace(tzinfo=UTC).timestamp() / 3600
 
 
-def load_ladders(conn: sqlite3.Connection, house_id: int) -> dict[int, tuple[int, list[tuple[int, int]]]]:
-    """variant_id -> (is_commodity, ascending [(unit price, quantity)])."""
+def load_ladders(conn: sqlite3.Connection, house_id: int) -> dict[int, tuple[int, list[tuple[int, int]], list[int]]]:
+    """variant_id -> (is_commodity, ascending [(unit price, quantity)], listings at each price)."""
     rows = conn.execute(
         "SELECT variant_id, MAX(is_commodity), unit_price, SUM(quantity), COUNT(*) FROM listings "
         "WHERE house_id = ? GROUP BY variant_id, unit_price ORDER BY variant_id, unit_price", (house_id,))
     out = {}
     for variant_id, group in groupby(rows, key=lambda r: r[0]):
         group = list(group)
-        out[variant_id] = (group[0][1], [(r[2], r[3]) for r in group], sum(r[4] for r in group))
+        out[variant_id] = (group[0][1], [(r[2], r[3]) for r in group], [r[4] for r in group])
+    return out
+
+
+def without_junk(ladders: dict, history: dict, tun) -> dict:
+    """The same ladders with junk-priced listings removed (see pricing.junk_ceiling)."""
+    out = {}
+    for variant_id, (is_commodity, levels, counts) in ladders.items():
+        hist = history.get(variant_id)
+        ceiling = junk_ceiling(levels, hist.ref_price if hist else None, tun.junk_multiple, tun.market_fraction)
+        if ceiling is not None and levels[-1][0] > ceiling:
+            keep = sum(1 for price, _ in levels if price <= ceiling)
+            levels, counts = levels[:keep], counts[:keep]
+        out[variant_id] = (is_commodity, levels, counts)
     return out
 
 
@@ -75,7 +88,8 @@ def load_history(conn: sqlite3.Connection, house_id: int, settings: Settings):
                     for price, qty in json.loads(column):
                         into[price] = into.get(price, 0) + qty
         history[variant_id] = build_history(points, span_hours, sold_levels=sold, new_levels=new,
-                                            level_days=level_days)
+                                            level_days=level_days,
+                                            junk_multiple=settings.tuning.junk_multiple)
     return history, span_hours, snaps[0][0]
 
 
@@ -96,7 +110,7 @@ def analyse_house(conn: sqlite3.Connection, house_id: int, settings: Settings) -
     history, span_hours, _ = loaded
 
     vendor = _vendor_prices(conn)
-    ladders = load_ladders(conn, house_id)
+    ladders = without_junk(load_ladders(conn, house_id), history, tun)
 
     # What each item is (for disenchanting) and the plain, unmodified variant of each item (for materials).
     item_of, base_variant, item_name = {}, {}, {}
@@ -161,7 +175,8 @@ def analyse_house(conn: sqlite3.Connection, house_id: int, settings: Settings) -
 
     market_rows, signal_rows = [], []
     empty = build_history([], span_hours)
-    for variant_id, (is_commodity, levels, n_listings) in ladders.items():
+    for variant_id, (is_commodity, levels, counts) in ladders.items():
+        n_listings = sum(counts)
         hist = history.get(variant_id, empty)
         market_rows.append((
             house_id, variant_id, is_commodity, levels[0][0], market_price(levels, tun.market_fraction),
@@ -216,7 +231,7 @@ def analyse_exports(conn: sqlite3.Connection, settings: Settings) -> int:
         conn.commit()
         return 0
     dest_hist, _, first_snap = loaded
-    dest_ladders = load_ladders(conn, dest)
+    dest_ladders = without_junk(load_ladders(conn, dest), dest_hist, settings.tuning)
     dest_sold_price = {r[0]: r[1] for r in conn.execute(
         "SELECT variant_id, SUM(sold_value) * 1.0 / SUM(sold_qty) FROM item_stats "
         "WHERE house_id = ? AND snapshot_id >= ? GROUP BY variant_id HAVING SUM(sold_qty) > 0",
@@ -236,7 +251,7 @@ def analyse_exports(conn: sqlite3.Connection, settings: Settings) -> int:
             if hist is None:
                 continue
             sig = export_signal(
-                levels, dest_ladders.get(variant_id, (0, [], 0))[1], hist, dest_sold_price.get(variant_id),
+                levels, dest_ladders.get(variant_id, (0, [], []))[1], hist, dest_sold_price.get(variant_id),
                 buyer_prices.get(variant_id), buyer if buyer_tracked else None,
                 vendor.get(variant_id, (None, None))[0], bool(is_commodity), fees, settings.tuning)
             if sig:
