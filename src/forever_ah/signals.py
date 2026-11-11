@@ -475,6 +475,8 @@ def craft_signal(levels: list[Level], hist: History, materials: list[tuple[str, 
         return None
     cost_each = sum(count * price for _, count, price, _ in materials) / makes
     qty = min(max(1, int(rate * tun.horizon_days)), tun.craft_max)
+    if cooldown_days:
+        qty = 1                                      # one per cooldown: it must pay as a single craft
     sig = _finish("CRAFT", qty, math.ceil(cost_each), math.ceil(cost_each * qty), target, qty / rate, hist,
                   vendor, is_commodity, fees, tun, share, pressure)
     if sig is None:
@@ -483,10 +485,9 @@ def craft_signal(levels: list[Level], hist: History, materials: list[tuple[str, 
                       for name, count, price, from_vendor in materials)
     recipe = f"{profession or 'Crafted'}: {parts}" + (f" makes {makes:g}" if makes != 1 else "")
     notes = [recipe]
-    if cooldown_days and sig.buy_qty > 1:
+    if cooldown_days:
         every = "day" if cooldown_days == 1 else f"{cooldown_days} days"
-        notes.append(f"Cooldown in the original game: one per character every {every}, "
-                     f"so {sig.buy_qty} needs several characters")
+        notes.append(f"Cooldown in the original game: one per character every {every}, so this is for one craft")
     return replace(sig, reasons=notes + sig.reasons)
 
 

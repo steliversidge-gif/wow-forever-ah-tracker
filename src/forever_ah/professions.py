@@ -90,7 +90,7 @@ def disenchant_yield(quality: str | None, item_class: str | None, item_level: in
 
 
 # Crafted items whose recipe had a per-character cooldown in the original game: item id -> days.
-# Not confirmed for Forever. More than one of these in a cooldown needs more than one character.
+# Not confirmed for Forever. CRAFT signals for these are for a single craft.
 COOLDOWN_DAYS = {
     12360: 2,   # Arcanite Bar (transmute)
     7068: 1,    # Elemental Fire (transmute)
