@@ -8,6 +8,8 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 
 from forever_ah.blizzard import WOWHEAD_CLASSES, BlizzardClient, http_date_to_utc
+from forever_ah.lifecycle import RateCounts, Rates, rates_from_counts
+from forever_ah.pricing import squash_levels
 from forever_ah.config import FACTIONS, Settings
 from forever_ah.lifecycle import Listing, diff_snapshot
 from forever_ah.pricing import market_price, price_levels
@@ -86,6 +88,17 @@ def parse_listings(auctions: list[dict], commodities: list[dict], variants: Vari
     return curr
 
 
+def measured_rates(conn: sqlite3.Connection, house_id: int) -> tuple[Rates, dict[str, RateCounts]]:
+    """This house's sale / withdrawal / repost base rates, re-measured from every
+    hourly diff still in the database (defaults fill in where the sample is thin)."""
+    pooled = {
+        r[0]: RateCounts(*r[1:]) for r in conn.execute(
+            "SELECT kind, SUM(behind_n), SUM(behind_gone), SUM(front_n), SUM(front_gone), SUM(lapsed_n), "
+            "SUM(lapsed_reposted) FROM rate_counts WHERE house_id = ? GROUP BY kind", (house_id,))
+    }
+    return rates_from_counts(pooled.get("stack"), pooled.get("gear")), pooled
+
+
 def ingest_house(conn: sqlite3.Connection, house_id: int, published_at: str, curr: dict[int, Listing],
                  n_auctions: int, n_commodities: int, settings: Settings) -> dict:
     """Apply one snapshot for one house inside a single transaction."""
@@ -108,8 +121,9 @@ def ingest_house(conn: sqlite3.Connection, house_id: int, published_at: str, cur
             "SELECT auction_id, variant_id, is_commodity, unit_price, quantity, time_left "
             "FROM listings WHERE house_id = ?", (house_id,))
     }
+    rates, _ = measured_rates(conn, house_id)
     diff = diff_snapshot(prev, curr, gap_hours, first=first, max_gap_hours=tun.max_gap_hours,
-                         tolerance=tun.noncommodity_tolerance)
+                         tolerance=tun.noncommodity_tolerance, rates=rates)
 
     snapshot_id = conn.execute(
         "INSERT INTO snapshots (house_id, published_at, fetched_at, n_auctions, n_commodities, gap_hours) "
@@ -145,8 +159,13 @@ def ingest_house(conn: sqlite3.Connection, house_id: int, published_at: str, cur
             sum(q for _, q in levels), len(pairs),
             round(f.sold_qty, 2) if f else 0, round(f.sold_value) if f else 0,
             round(f.cancelled_qty, 2) if f else 0, round(f.expired_qty, 2) if f else 0, f.new_qty if f else 0,
+            squash_levels(f.sold_levels) if f else None, squash_levels(f.new_levels) if f else None,
         ))
-    conn.executemany("INSERT INTO item_stats VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
+    conn.executemany("INSERT INTO item_stats VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
+    conn.executemany(
+        "INSERT INTO rate_counts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ((house_id, snapshot_id, kind, c.behind_n, c.behind_gone, c.front_n, c.front_gone, c.lapsed_n,
+          c.lapsed_reposted) for kind, c in diff.counts.items()))
     return {"snapshot_id": snapshot_id, "listings": len(curr), "new": len(diff.new),
             "gone": len(diff.gone), "sold_units": round(sum(f.sold_qty for f in diff.flows.values())),
             "gap_hours": gap_hours}
@@ -240,12 +259,13 @@ def prune(conn: sqlite3.Connection, settings: Settings) -> None:
     old = [r[0] for r in conn.execute("SELECT snapshot_id FROM snapshots WHERE published_at < ?", (cutoff,))]
     if old:
         conn.execute("DELETE FROM item_stats WHERE snapshot_id <= ?", (max(old),))
+        conn.execute("DELETE FROM rate_counts WHERE snapshot_id <= ?", (max(old),))
         conn.execute("DELETE FROM snapshots WHERE snapshot_id <= ?", (max(old),))
     tracked = {h["house_id"] for h in tracked_houses(conn, settings)}
     for (house_id,) in conn.execute("SELECT DISTINCT house_id FROM snapshots").fetchall():
         if house_id not in tracked:
             log.info("House %s is no longer tracked: removing its data", house_id)
-            for table in ("listings", "item_stats", "market", "signals", "snapshots"):
+            for table in ("listings", "item_stats", "market", "signals", "snapshots", "rate_counts", "signal_log"):
                 conn.execute(f"DELETE FROM {table} WHERE house_id = ?", (house_id,))
             conn.execute("UPDATE houses SET last_modified = NULL WHERE house_id = ?", (house_id,))
             dropped_house = True

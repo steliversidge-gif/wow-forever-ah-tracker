@@ -284,3 +284,140 @@ def test_expected_expiries():
     assert expected_expiries(0.1, 24) < 0.001              # sells in a couple of hours: expiry is negligible
     assert 0.55 < expected_expiries(1.0, 24) < 0.60        # a "one day" sale often outlasts a 24h listing
     assert 2.4 < expected_expiries(3.0, 24) < 2.6
+
+
+# -- price-specific demand, undercut pressure, listing duration -----------------
+def levelled(sold=None, new=None, **kw):
+    base = dict(n_snaps=48, ref_price=1000, trend_per_day=0.0, cv=0.05, sold_per_day=100.0, total_sold=700,
+                level_days=1.0)
+    base.update(kw)
+    return History(sold_levels=tuple(sorted((sold or {}).items())), new_levels=tuple(sorted((new or {}).items())), **base)
+
+
+def test_demand_counts_only_sales_at_or_above_the_price():
+    from forever_ah.signals import demand_at
+
+    hist = levelled(sold={500: 80, 990: 15, 1200: 5})
+    rate, share, pressure = demand_at(hist, 1000)
+    assert share == 0.2 and rate == 20 and pressure == 0      # 990 is within 3% of 1000; 500 is not
+    assert demand_at(hist, 400)[0] == 100
+    assert demand_at(levelled(sold={500: 100}), 1000)[0] == 0   # nothing has ever sold that high
+    assert demand_at(History(sold_per_day=50.0), 1000) == (50.0, None, 0.0)   # no price data yet: all sales count
+
+
+def test_new_listings_at_the_same_price_jump_the_queue():
+    from forever_ah.signals import demand_at
+
+    hist = levelled(sold={1000: 100}, new={1000: 30, 990: 30, 800: 500})
+    rate, _, pressure = demand_at(hist, 1000)
+    assert rate == 40 and pressure == 0.6                     # 800 is far below: it sells at its own price
+    buried = demand_at(levelled(sold={1000: 100}, new={1000: 400}), 1000)
+    assert buried[0] == 10 and buried[2] == 4                 # a tenth of demand is kept as a floor
+
+
+def test_flip_slows_and_gets_riskier_when_few_sales_reach_the_relist_price():
+    easy = flip_signal([(500, 5), (900, 100)], levelled(sold={900: 100}), 10, True, FEES, TUN)
+    hard = flip_signal([(500, 5), (900, 100)], levelled(sold={520: 90, 900: 10}), 10, True, FEES, TUN)
+    assert hard.days_to_sell == 10 * easy.days_to_sell
+    assert any("10% of sales reach this price" in r for r in hard.reasons)
+    crowded = flip_signal([(500, 5), (900, 100)], levelled(sold={900: 100}, new={900: 200}), 10, True, FEES, TUN)
+    assert crowded.risk_score >= easy.risk_score + 25
+    assert any("arrive faster than it sells" in r for r in crowded.reasons)
+
+
+def test_listing_duration():
+    from forever_ah.signals import choose_listing_hours
+
+    fees = HouseFees(cut=0.05, deposit_rate=0.60, min_deposit=100, listing_hours=24)
+    steady, falling = levelled(), levelled(trend_per_day=-0.2)
+    assert choose_listing_hours(5000, 1, False, fees, steady, 0.0) == 24    # longest loses least on average
+    assert choose_listing_hours(5000, 1, False, fees, falling, 0.0) == 8    # may need repricing: cap the forfeit
+    assert choose_listing_hours(5000, 1, False, fees, steady, 0.6) == 8     # crowded price: same
+    assert choose_listing_hours(100, 1, False, fees, falling, 0.0) == 24    # 1s minimum either way: longer is free
+    sig = flip_signal([(500, 5), (2000, 100)], levelled(trend_per_day=-0.2, sold={1000: 100}), 5000, True, FEES, TUN)
+    assert sig.list_hours == 8 and any("List for 8h" in r for r in sig.reasons)
+
+
+def test_squash_levels():
+    import json
+
+    from forever_ah.pricing import squash_levels
+
+    assert squash_levels({}) is None
+    assert json.loads(squash_levels({100: 2, 200: 1.5})) == [[100, 2], [200, 1.5]]
+    five = json.loads(squash_levels({100: 10, 101: 10, 500: 1, 900: 1, 2000: 1}))
+    assert len(five) == 4 and five[0] == [100, 20] and sum(q for _, q in five) == 23
+
+
+# -- base rates ----------------------------------------------------------------
+def test_rates_are_remeasured_only_from_a_big_enough_sample():
+    from forever_ah.lifecycle import RateCounts, Rates, rates_from_counts
+
+    default = Rates()
+    assert rates_from_counts(None, None) == default
+    thin = RateCounts(behind_n=10, behind_gone=9, front_n=10, front_gone=9, lapsed_n=10, lapsed_reposted=0)
+    assert rates_from_counts(thin, thin) == default
+    big = RateCounts(behind_n=10000, behind_gone=300, front_n=10000, front_gone=2300, lapsed_n=1000, lapsed_reposted=500)
+    r = rates_from_counts(big, None)
+    assert (r.stack_cancel, round(r.stack_sale, 4), r.stack_repost) == (0.03, 0.2, 0.5)
+    assert r.gear_sale == default.gear_sale
+
+
+def test_diff_tallies_base_rates_for_hourly_gaps_only():
+    prev = {1: L(price=100, left="LONG"), 2: L(price=150, left="LONG"), 3: L(price=150, left="LONG")}
+    hourly = diff_snapshot(prev, {1: L(price=100, left="LONG"), 2: L(price=150, left="LONG")}, 1.0)
+    c = hourly.counts["stack"]
+    assert (c.front_n, c.front_gone, c.behind_n, c.behind_gone) == (1, 0, 2, 1)
+    assert diff_snapshot(prev, {1: L(price=100, left="LONG")}, 2.5).counts == {}
+
+
+def test_diff_records_what_sold_and_what_was_listed_at_each_price():
+    d = diff_snapshot({1: L(price=100, qty=10)}, {1: L(price=100, qty=4), 2: L(price=90, qty=7)}, 1.0)
+    assert d.flows[1].sold_levels == {100: 6} and d.flows[1].new_levels == {90: 7}
+
+
+# -- scorecard -----------------------------------------------------------------
+def test_scorecard_judges_a_recommendation_against_later_sales():
+    from forever_ah.scorecard import judge, window_hours
+
+    assert window_hours(0.05) == (2, 6) and window_hours(1.0) == (24, 48) and window_hours(5) == (120, 120)
+    t = "2026-11-11 %02d:25:00"
+    sales = [(t % 15, 4, "[[1000,4]]"), (t % 16, 20, "[[600,14],[980,6]]"), (t % 17, 5, "[[1000,5]]")]
+    assert judge(t % 14, 10, 1000, 0.1, sales)[0] == "ON_TIME"          # 10 units at ~1000 within 2h (predicted 3h)
+    assert judge(t % 14, 15, 1000, 0.05, sales) == ("LATE", 1.0, 1, 3.0)  # needed the third hour; predicted 2h
+    outcome, share, any_ok, hours = judge(t % 14, 40, 1000, 0.1, sales)
+    assert (outcome, share, any_ok, hours) == ("MISSED", 0.375, 0, None)
+    assert judge(t % 14, 20, 1000, 0.1, sales)[2] == 1                   # 29 units sold at some price
+
+
+def test_scorecard_logs_once_a_day_and_scores_when_the_window_closes(tmp_path):
+    from forever_ah import db, scorecard
+    from forever_ah.config import Settings
+
+    conn = db.connect(tmp_path / "t.db")
+    settings = Settings(root=tmp_path, houses={"alliance": -1, "horde": 114, "blackwater": 117})
+    conn.execute("INSERT INTO houses (house_id, name, faction, slot) VALUES (114, 'Horde Auction House', 'horde', 1)")
+    t = "2026-11-11 %02d:25:00"
+
+    def snapshot(hour, sold_levels=None, sold=0):
+        sid = conn.execute("INSERT INTO snapshots (house_id, published_at, fetched_at, n_auctions, n_commodities) "
+                           "VALUES (114, ?, ?, 0, 0)", (t % hour, t % hour)).lastrowid
+        conn.execute("INSERT INTO item_stats (house_id, variant_id, snapshot_id, sold_qty, sold_levels) "
+                     "VALUES (114, 7, ?, ?, ?)", (sid, sold, sold_levels))
+
+    snapshot(10)
+    conn.execute("INSERT INTO signals VALUES (114, 7, 'FLIP', 5, 500, 2500, 1000, 2000, 0.8, 0.05, 20, 'LOW', '[]', 24)")
+    conn.execute("INSERT INTO signals VALUES (114, 8, 'VENDOR', 5, 50, 250, 100, 250, 1.0, 0, 0, 'NONE', '[]', NULL)")
+    assert scorecard.log_signals(conn, settings) == 1            # vendor sales carry no market risk to score
+    assert scorecard.log_signals(conn, settings) == 0            # already being watched
+    snapshot(11, "[[1000,3]]", 3)
+    snapshot(12, "[[1000,2]]", 2)
+    assert scorecard.score(conn) == 0                            # the 6h window is still open
+    for hour in (13, 14, 15, 16):
+        snapshot(hour)
+    assert scorecard.score(conn) == 1
+    s = scorecard.summary(conn)
+    assert s["pending"] == 0
+    assert s["rows"] == [{"strategy": "FLIP", "risk_level": "LOW", "checked": 1, "on_time": 1, "late": 0,
+                          "missed": 0, "enough_buyers": 1}]
+    conn.close()

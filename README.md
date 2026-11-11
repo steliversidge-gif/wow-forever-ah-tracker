@@ -15,7 +15,7 @@ Pages. No server, no home PC left on, nothing to pay for.
 | **Market** | Every listed item with its cheapest price, typical price, trend and estimated sales per day. Use it to price things you want to sell. |
 | **Item page** | Price history, estimated sales, and the order book with the running cost of buying it out. |
 | **Cross-faction** | Every EXPORT trade in both directions: buy in one faction's house, list on Blackwater for the other faction. |
-| **Status** | Collector health, fee assumptions, and the one-off "which house is mine?" setup. |
+| **Status** | Collector health, the scorecard (did past recommendations work?), when things sell by hour of day, the measured base rates, and the one-off "which house is mine?" setup. |
 
 ### The four plays
 
@@ -33,8 +33,20 @@ Pages. No server, no home PC left on, nothing to pay for.
   and one lost deposit. Blackwater carries roughly a twentieth of a faction house's
   volume, so these are rated riskier than a flip.
 
-Risk is a 0–100 score built from four things: how fast the item sells, how much history
-backs the estimate, how volatile the price is, and whether it is falling. Every signal
+**Selling speed is judged at your price, not any price.** Only sales at the relist price
+or above count, and listings other sellers post at that same price are subtracted, because
+at one price the newest listing sells first. Each trade also suggests a listing duration:
+24h by default (the deposit costs the same per hour and is refunded on sale, so the
+longest listing loses least), or 8h when the price is falling, volatile or crowded and
+you may have to cancel and reprice.
+
+**The scorecard keeps it honest.** Every recommendation is logged when first made and
+later checked against what the market did ([scorecard.py](src/forever_ah/scorecard.py)).
+The base rates behind the sales estimates are re-measured from every hourly snapshot.
+
+Risk is a 0–100 score built from how fast the item sells, how much history backs the
+estimate, how volatile the price is, whether it is falling, how often buyers pay the
+relist price, and how much competing stock is posted at it. Every signal
 lists its reasons in plain English. All definitions live in one file,
 [src/forever_ah/signals.py](src/forever_ah/signals.py).
 

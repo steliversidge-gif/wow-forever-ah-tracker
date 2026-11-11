@@ -62,6 +62,24 @@ class Flow:
     cancelled_qty: float = 0
     expired_qty: float = 0
     new_qty: int = 0
+    sold_levels: dict[int, float] = field(default_factory=dict)   # price -> units sold at it
+    new_levels: dict[int, int] = field(default_factory=dict)      # price -> units newly listed at it
+
+    def sold(self, qty: float, price: int) -> None:
+        self.sold_qty += qty
+        self.sold_value += qty * price
+        self.sold_levels[price] = self.sold_levels.get(price, 0) + qty
+
+
+@dataclass(slots=True)
+class RateCounts:
+    """Tallies from one diff that the base rates are re-measured from."""
+    behind_n: int = 0
+    behind_gone: int = 0
+    front_n: int = 0
+    front_gone: int = 0
+    lapsed_n: int = 0
+    lapsed_reposted: int = 0
 
 
 @dataclass(slots=True)
@@ -70,6 +88,24 @@ class Diff:
     changed: list[int] = field(default_factory=list)   # quantity or time_left moved
     gone: list[int] = field(default_factory=list)
     flows: dict[int, Flow] = field(default_factory=dict)
+    counts: dict[str, RateCounts] = field(default_factory=dict)   # "stack" / "gear"; empty unless ~hourly
+
+
+def rates_from_counts(stack: RateCounts | None, gear: RateCounts | None, default: Rates = Rates(),
+                      min_sample: int = 2000) -> Rates:
+    """Base rates measured from pooled tallies, keeping the default wherever the sample is thin."""
+    out = default._asdict()
+    for kind, c in (("stack", stack), ("gear", gear)):
+        if c is None:
+            continue
+        cancel = out[f"{kind}_cancel"]
+        if c.behind_n >= min_sample:
+            cancel = out[f"{kind}_cancel"] = min(0.5, max(0.001, c.behind_gone / c.behind_n))
+        if c.front_n >= min_sample:
+            out[f"{kind}_sale"] = min(0.9, max(0.002, c.front_gone / c.front_n - cancel))
+        if c.lapsed_n >= min_sample // 4:
+            out[f"{kind}_repost"] = min(0.95, c.lapsed_reposted / c.lapsed_n)
+    return Rates(**out)
 
 
 def expiry_chance(time_left: str, gap_hours: float) -> float:
@@ -137,6 +173,7 @@ def diff_snapshot(prev: dict[int, Listing], curr: dict[int, Listing], gap_hours:
 
     # A stack's place in the buying queue: cheapest first, then newest (highest id) first.
     survivor_floor: dict[int, int] = {}
+    untouched_floor: dict[int, int] = {}              # cheapest survivor nobody bought from
     new_floor: dict[int, int] = {}
     frontier: dict[int, tuple[int, int]] = {}         # deepest queue place that was bought from
     first_untouched: dict[int, tuple[int, int]] = {}  # first surviving stack nobody bought from
@@ -146,7 +183,9 @@ def diff_snapshot(prev: dict[int, Listing], curr: dict[int, Listing], gap_hours:
         if was is None:
             diff.new.append(auction_id)
             if not first:
-                flow(now.variant_id).new_qty += now.quantity
+                f = flow(now.variant_id)
+                f.new_qty += now.quantity
+                f.new_levels[now.unit_price] = f.new_levels.get(now.unit_price, 0) + now.quantity
             p = new_floor.get(now.variant_id)
             if p is None or now.unit_price < p:
                 new_floor[now.variant_id] = now.unit_price
@@ -160,17 +199,20 @@ def diff_snapshot(prev: dict[int, Listing], curr: dict[int, Listing], gap_hours:
         place = (was.unit_price, -auction_id)
         bought = was.quantity - now.quantity
         if bought > 0:
-            f = flow(variant)
-            f.sold_qty += bought
-            f.sold_value += bought * was.unit_price
+            flow(variant).sold(bought, was.unit_price)
             if variant not in frontier or place > frontier[variant]:
                 frontier[variant] = place
-        elif was.is_commodity and (variant not in first_untouched or place < first_untouched[variant]):
-            first_untouched[variant] = place
+        else:
+            p = untouched_floor.get(variant)
+            if p is None or was.unit_price < p:
+                untouched_floor[variant] = was.unit_price
+            if was.is_commodity and (variant not in first_untouched or place < first_untouched[variant]):
+                first_untouched[variant] = place
         if now.quantity != was.quantity or now.time_left != was.time_left:
             diff.changed.append(auction_id)
 
     known = gap_hours is not None and gap_hours <= max_gap_hours
+    relisted = dict(fresh)   # untouched copy: `fresh` is used up as reposts are matched below
     for auction_id, was in prev.items():
         if auction_id in curr:
             continue
@@ -185,8 +227,7 @@ def diff_snapshot(prev: dict[int, Listing], curr: dict[int, Listing], gap_hours:
         if was.is_commodity:
             if variant in frontier:
                 if place < frontier[variant]:        # buyers worked past it: certainly bought
-                    f.sold_qty += qty
-                    f.sold_value += qty * was.unit_price
+                    f.sold(qty, was.unit_price)
                     continue
                 outcome = "BEHIND"                   # a part-bought stack was ahead of it
             elif variant in first_untouched and place > first_untouched[variant]:
@@ -205,8 +246,8 @@ def diff_snapshot(prev: dict[int, Listing], curr: dict[int, Listing], gap_hours:
                 f.cancelled_qty += qty
                 continue
             weight = sale_weight(was, gap_hours, rates)
-            f.sold_qty += qty * weight
-            f.sold_value += qty * weight * was.unit_price
+            if weight > 0:
+                f.sold(qty * weight, was.unit_price)
             if expiry_chance(was.time_left, gap_hours) > 0:
                 f.expired_qty += qty * (1 - weight)
             else:
@@ -215,4 +256,24 @@ def diff_snapshot(prev: dict[int, Listing], curr: dict[int, Listing], gap_hours:
             f.cancelled_qty += qty
         elif outcome == "EXPIRED":
             f.expired_qty += qty
+
+    if known and 0.75 <= gap_hours <= 1.5:   # the base rates are per hour, so only tally hourly diffs
+        counts = diff.counts = {"stack": RateCounts(), "gear": RateCounts()}
+        for auction_id, was in prev.items():
+            c = counts["stack" if was.is_commodity else "gear"]
+            floor = untouched_floor.get(was.variant_id)
+            reach = floor if was.is_commodity or floor is None else floor * tolerance
+            behind = floor is not None and was.unit_price > reach
+            gone = auction_id not in curr
+            reposted = gone and (was.variant_id, was.quantity, was.unit_price) in relisted
+            if was.time_left in ("LONG", "VERY_LONG"):          # cannot have expired
+                if behind:
+                    c.behind_n += 1
+                    c.behind_gone += gone
+                else:
+                    c.front_n += 1
+                    c.front_gone += gone and not reposted
+            elif was.time_left == "SHORT" and not behind:       # certain to have run out
+                c.lapsed_n += 1
+                c.lapsed_reposted += reposted
     return diff

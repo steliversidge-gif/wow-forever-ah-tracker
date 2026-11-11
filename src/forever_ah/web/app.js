@@ -71,7 +71,8 @@ const PLAY = {
   VENDOR: 'Sell to a vendor', FLIP: 'Relist at the next price up', DIP: 'Hold for recovery',
   EXPORT: 'Buy here, list on Blackwater for the other faction',
 };
-const sellCell = s => money(s.sell_price) + (s.strategy === 'EXPORT' ? '<span class="why">on Blackwater</span>' : '');
+const sellCell = s => money(s.sell_price) + (s.strategy === 'VENDOR' ? '' : `<span class="why">${
+  [s.strategy === 'EXPORT' ? 'on Blackwater' : '', s.list_hours ? `list ${s.list_hours}h` : ''].filter(Boolean).join(' · ')}</span>`);
 
 // ---------------------------------------------------------------- buy list --
 async function viewBuy() {
@@ -201,8 +202,8 @@ async function viewItem(variantId) {
     ${sigs.map(s => `<div class="advice">
       <p><b>Buy ${num(s.buy_qty)}</b> at up to <b>${money(s.buy_max_price)}</b> each (${money(s.buy_cost)} in total).
         ${s.strategy === 'VENDOR' ? `Sell to a vendor for <b>${money(s.sell_price)}</b> each.`
-          : s.strategy === 'EXPORT' ? `List on the Blackwater house at <b>${money(s.sell_price)}</b> each.`
-          : `Relist at <b>${money(s.sell_price)}</b> each.`}
+          : s.strategy === 'EXPORT' ? `List on the Blackwater house at <b>${money(s.sell_price)}</b> each${s.list_hours ? ` for ${s.list_hours}h` : ''}.`
+          : `Relist at <b>${money(s.sell_price)}</b> each${s.list_hours ? ` for ${s.list_hours}h` : ''}.`}
         Expected profit <b>${money(s.profit)}</b> (${pct(s.roi)}) after fees.</p>
       <p>Risk: ${riskBadge(s.risk_level)} <span class="muted">— ${esc(s.reasons.join(' · '))}</span></p></div>`).join('')}
     <div class="tiles">
@@ -351,7 +352,7 @@ async function viewCross() {
     <tbody>${rows.slice(0, 200).map(s => `<tr>
       <td class="item">${itemLink(s)}<span class="why">${esc(s.reasons.join(' · '))}</span></td><td>${s.from}</td>
       <td class="num">${num(s.buy_qty)}</td><td class="num">${money(s.buy_max_price)}</td>
-      <td class="num">${money(s.buy_cost)}</td><td class="num">${money(s.sell_price)}</td>
+      <td class="num">${money(s.buy_cost)}</td><td class="num">${money(s.sell_price)}${s.list_hours ? `<span class="why">list ${s.list_hours}h</span>` : ''}</td>
       <td class="num"><b>${money(s.profit)}</b></td><td class="num">${pct(s.roi)}</td>
       <td class="num">${sellsIn(s.days_to_sell)}</td><td>${riskBadge(s.risk_level)}</td></tr>`).join('')}</tbody></table></div>`
     : `<div class="note">${dest.n_snaps < 7
@@ -382,7 +383,94 @@ function viewStatus() {
           ${ids.map(i => `<th class="num">House #${i}</th>`).join('')}</tr></thead><tbody>${items.map(it => `<tr><td>${esc(it.name)}</td>
           ${ids.map(i => `<td class="num">${money(it.prices[i])}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`
           : '<p class="muted">No comparison items yet.</p>'}`;
-      }).join('')}` : ''}`;
+      }).join('')}` : ''}
+    ${scorecardHtml(m.scorecard)}
+    <h2>When things sell — ${esc(houseLabel(houseMeta(S.houseId)))}</h2>
+    <p class="muted">Average value sold in the hour up to each snapshot, in your local time. List shortly before the busy
+      hours: at one price the newest listing sells first. It takes about a week of data to settle.</p>
+    <div class="chart" id="c-hours"></div>
+    <details><summary>Sales by hour as a table</summary><div id="t-hours"></div></details>
+    ${ratesHtml(m.houses)}`;
+  hourChart($('#c-hours'), $('#t-hours'), houseMeta(S.houseId).sales_by_hour || []);
+}
+
+function scorecardHtml(sc) {
+  const head = `<h2>Scorecard: did past recommendations work?</h2>
+    <p class="muted">Each recommendation is logged when first made, then checked against what the market did next.
+      "Sold at the price" means at least the suggested quantity changed hands at the suggested sell price (within 3%).
+      It is strict for flips: the play assumes you bought out the cheap listings, and if nobody did, buyers kept taking those.
+      "Enough buyers" is the looser test: that many units sold at any price.</p>`;
+  if (!sc || !sc.rows.length) {
+    return head + `<div class="note">Nothing scored yet${sc && sc.pending ? ` — ${num(sc.pending)} recommendation${sc.pending === 1 ? ' is' : 's are'} being watched` : ''}.
+      A recommendation is scored once twice its predicted selling time has passed (at least 6 hours).</div>`;
+  }
+  const share = (a, b) => b ? pct(a / b) : '–';
+  return head + `<div class="table-wrap"><table><thead><tr><th>Play</th><th>Risk rating</th><th class="num">Checked</th>
+    <th class="num">Sold at the price, on time</th><th class="num">Sold at the price, late</th><th class="num">Not sold at the price</th>
+    <th class="num">Enough buyers at any price</th></tr></thead><tbody>${sc.rows.map(r => `<tr><td>${esc(r.strategy)}</td>
+    <td>${riskBadge(r.risk_level)}</td><td class="num">${num(r.checked)}</td><td class="num">${share(r.on_time, r.checked)}</td>
+    <td class="num">${share(r.late, r.checked)}</td><td class="num">${share(r.missed, r.checked)}</td>
+    <td class="num">${share(r.enough_buyers, r.checked)}</td></tr>`).join('')}</tbody></table></div>
+    <p class="muted">${num(sc.pending)} more being watched. Results older than ${sc.keep_days} days are dropped.</p>`;
+}
+
+function ratesHtml(houses) {
+  const rows = houses.filter(h => h.rates);
+  if (!rows.length) return '';
+  const cell = (h, k) => `<td class="num">${pct(h.rates[k])}</td>`;
+  return `<h2>Base rates behind the sales estimates</h2>
+    <p class="muted">Chances per hour, re-measured from every hourly snapshot still held. They decide how much of an unexplained
+      disappearance counts as a sale. A house with too few listings observed keeps the starting values.</p>
+    <div class="table-wrap"><table><thead><tr><th>House</th><th>Kind</th><th class="num">Front listing sells</th>
+      <th class="num">Withdrawn quietly</th><th class="num">Expired listings reposted identical</th>
+      <th class="num">Listings observed</th></tr></thead><tbody>${rows.map(h => ['stack', 'gear'].map(k => `<tr>
+      <td>${esc(houseLabel(h))}</td><td>${k === 'stack' ? 'Stackable goods' : 'Gear'}</td>${cell(h, k + '_sale')}${cell(h, k + '_cancel')}
+      ${cell(h, k + '_repost')}<td class="num">${num((h.rates.sample || {})[k] || 0)}</td></tr>`).join('')).join('')}</tbody></table></div>`;
+}
+
+// Value sold by hour of day. Hours arrive in UTC and are shown in the viewer's local time.
+function hourChart(el, tableEl, byHour) {
+  if (!byHour.length) {
+    el.innerHTML = '<p class="muted">No hourly sales recorded yet.</p>';
+    tableEl.innerHTML = '';
+    return;
+  }
+  const local = Array.from({ length: 24 }, () => null);
+  for (const r of byHour) {
+    const d = new Date(Date.UTC(2026, 0, 1, r.hour));
+    local[d.getHours()] = r;
+  }
+  const W = 800, H = 240, l = 48, r = 12, top = 10, b = 24;
+  const hi = Math.max(...byHour.map(x => x.value), 1);
+  const y = v => top + (1 - v / hi) * (H - top - b), slot = (W - l - r) / 24, w = slot - 4;
+  let svg = '';
+  for (const v of niceTicks(0, hi)) {
+    svg += `<line x1="${l}" x2="${W - r}" y1="${y(v)}" y2="${y(v)}" stroke="var(--grid)"/>
+            <text x="${l - 6}" y="${y(v) + 4}" text-anchor="end">${shortMoney(v)}</text>`;
+  }
+  local.forEach((x, h) => {
+    const cx = l + slot * h + slot / 2;
+    if (h % 3 === 0) svg += `<text x="${cx}" y="${H - 6}" text-anchor="middle">${String(h).padStart(2, '0')}:00</text>`;
+    if (!x) return;
+    const t = y(x.value), hgt = y(0) - t;
+    svg += `<rect data-h="${h}" x="${(cx - w / 2).toFixed(1)}" y="${t.toFixed(1)}" width="${w.toFixed(1)}" height="${hgt.toFixed(1)}" rx="${Math.min(4, hgt)}" fill="var(--series-1)"/>`;
+  });
+  el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Value sold by hour of day, bar chart">${svg}</svg>`;
+  const svgEl = $('svg', el);
+  svgEl.addEventListener('mousemove', ev => {
+    const box = svgEl.getBoundingClientRect();
+    const h = Math.floor(((ev.clientX - box.left) / box.width * W - l) / slot), x = local[h];
+    el.querySelectorAll('rect').forEach(q => q.setAttribute('opacity', Number(q.dataset.h) === h ? 1 : 0.45));
+    if (!x) { tip.hidden = true; return; }
+    tip.innerHTML = `<b>${String(h).padStart(2, '0')}:00</b><br>Sold: <b>${money(x.value)}</b> an hour<br>${x.snapshots} snapshot${x.snapshots === 1 ? '' : 's'}`;
+    tip.hidden = false;
+    tip.style.left = Math.min(ev.clientX + 14, innerWidth - tip.offsetWidth - 8) + 'px';
+    tip.style.top = (ev.clientY + 14) + 'px';
+  });
+  svgEl.addEventListener('mouseleave', () => { tip.hidden = true; el.querySelectorAll('rect').forEach(q => q.setAttribute('opacity', 1)); });
+  tableEl.innerHTML = `<div class="table-wrap" style="max-width:420px"><table><thead><tr><th>Hour (local)</th>
+    <th class="num">Value sold per hour</th><th class="num">Snapshots</th></tr></thead><tbody>${local.map((x, h) => x
+      ? `<tr><td>${String(h).padStart(2, '0')}:00</td><td class="num">${money(x.value)}</td><td class="num">${x.snapshots}</td></tr>` : '').join('')}</tbody></table></div>`;
 }
 
 // ------------------------------------------------------------------ router --

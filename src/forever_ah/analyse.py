@@ -43,13 +43,30 @@ def load_history(conn: sqlite3.Connection, house_id: int, settings: Settings):
     snap_hours = {s[0]: _hours(s[1]) for s in snaps}
     span_hours = _hours(snaps[-1][1]) - _hours(snaps[0][1])
 
+    # Sale and new-listing prices have only been recorded since the first tallied diff.
+    first_levels = conn.execute(
+        "SELECT MIN(snapshot_id) FROM rate_counts WHERE house_id = ? AND snapshot_id >= ?",
+        (house_id, snaps[0][0])).fetchone()[0]
+    level_days = None
+    if first_levels in snap_hours:   # that diff covered the hour before its snapshot
+        level_days = (_hours(snaps[-1][1]) - snap_hours[first_levels] + 1) / 24
+
     history = {}
     rows = conn.execute(
-        "SELECT variant_id, snapshot_id, market_price, sold_qty FROM item_stats "
+        "SELECT variant_id, snapshot_id, market_price, sold_qty, sold_levels, new_levels FROM item_stats "
         "WHERE house_id = ? AND snapshot_id >= ? ORDER BY variant_id, snapshot_id", (house_id, snaps[0][0]))
     for variant_id, group in groupby(rows, key=lambda r: r[0]):
-        points = [(snap_hours[r[1]], r[2], r[3]) for r in group if r[1] in snap_hours]
-        history[variant_id] = build_history(points, span_hours)
+        points, sold, new = [], {}, {}
+        for r in group:
+            if r[1] not in snap_hours:
+                continue
+            points.append((snap_hours[r[1]], r[2], r[3]))
+            for column, into in ((r[4], sold), (r[5], new)):
+                if column:
+                    for price, qty in json.loads(column):
+                        into[price] = into.get(price, 0) + qty
+        history[variant_id] = build_history(points, span_hours, sold_levels=sold, new_levels=new,
+                                            level_days=level_days)
     return history, span_hours, snaps[0][0]
 
 
@@ -86,13 +103,13 @@ def analyse_house(conn: sqlite3.Connection, house_id: int, settings: Settings) -
             signal_rows.append((
                 house_id, variant_id, sig.strategy, sig.buy_qty, sig.buy_max_price, sig.buy_cost,
                 sig.sell_price, sig.profit, sig.roi, sig.days_to_sell, sig.risk_score, sig.risk_level,
-                json.dumps(sig.reasons),
+                json.dumps(sig.reasons), sig.list_hours,
             ))
 
     conn.execute("DELETE FROM market WHERE house_id = ?", (house_id,))
     conn.execute("DELETE FROM signals WHERE house_id = ?", (house_id,))
     conn.executemany("INSERT INTO market VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", market_rows)
-    conn.executemany("INSERT INTO signals VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", signal_rows)
+    conn.executemany("INSERT INTO signals VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", signal_rows)
     conn.commit()
     log.info("House %s: %d items priced, %d signals", house_id, len(market_rows), len(signal_rows))
     return len(signal_rows)
@@ -139,9 +156,9 @@ def analyse_exports(conn: sqlite3.Connection, settings: Settings) -> int:
                 rows.append((
                     pinned[source], variant_id, sig.strategy, sig.buy_qty, sig.buy_max_price, sig.buy_cost,
                     sig.sell_price, sig.profit, sig.roi, sig.days_to_sell, sig.risk_score, sig.risk_level,
-                    json.dumps(sig.reasons),
+                    json.dumps(sig.reasons), sig.list_hours,
                 ))
-    conn.executemany("INSERT INTO signals VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
+    conn.executemany("INSERT INTO signals VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
     conn.commit()
     log.info("Exports via Blackwater: %d signals", len(rows))
     return len(rows)

@@ -28,6 +28,11 @@ from forever_ah.config import Fees, Tuning
 from forever_ah.pricing import Level, format_money, median
 
 
+AT_PRICE = 0.97        # "at this price" means within 3% under it
+MIN_LEVEL_DAYS = 0.25  # price-level data is ignored until 6 hours of it exist
+SHORT_LISTING = 8      # hours; the fallback when a trade may need repricing
+
+
 @dataclass(frozen=True)
 class History:
     n_snaps: int = 0                    # snapshots in which the item had a price
@@ -36,6 +41,25 @@ class History:
     cv: float | None = None             # volatility: stdev / mean of hourly market prices
     sold_per_day: float | None = None   # units, inferred (see lifecycle.py)
     total_sold: float = 0               # expected units: uncertain disappearances count in part
+    sold_levels: tuple = ()             # ((price, units sold at it), ...) over the window
+    new_levels: tuple = ()              # ((price, units newly listed at it), ...)
+    level_days: float | None = None     # how long those two have been recorded
+
+    def share_sold_at(self, price: int) -> float | None:
+        """Share of observed sales that went for `price` or more (within 3%). None = not enough to say."""
+        total = sum(q for _, q in self.sold_levels)
+        if not self.level_days or total < 1:
+            return None
+        return sum(q for p, q in self.sold_levels if p >= price * AT_PRICE) / total
+
+    def new_per_day_at(self, price: int) -> float:
+        """Units a day that other sellers newly list AT `price` (within 3% under it).
+
+        At one price the newest listing sells first, so these jump the queue.
+        """
+        if not self.level_days:
+            return 0.0
+        return sum(q for p, q in self.new_levels if price * AT_PRICE <= p <= price) / self.level_days
 
 
 @dataclass(frozen=True)
@@ -59,6 +83,7 @@ class Signal:
     risk_score: int
     risk_level: str
     reasons: list[str]
+    list_hours: int | None = None       # suggested listing duration; None for a vendor sale
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -75,7 +100,8 @@ def house_fees(fees: Fees, faction: str) -> HouseFees:
 
 
 def build_history(points: list[tuple[float, int | None, int]], span_hours: float,
-                  min_span_hours: float = 6.0) -> History:
+                  min_span_hours: float = 6.0, sold_levels: dict | None = None,
+                  new_levels: dict | None = None, level_days: float | None = None) -> History:
     """Summarise an item's hourly rows.
 
     points: (time in hours, market price or None, units sold), oldest first.
@@ -85,8 +111,12 @@ def build_history(points: list[tuple[float, int | None, int]], span_hours: float
     priced = [(t, p) for t, p, _ in points if p]
     total_sold = sum(s for _, _, s in points)
     sold_per_day = total_sold / (span_hours / 24) if span_hours >= min_span_hours else None
+    levels = {}
+    if level_days and level_days >= MIN_LEVEL_DAYS:
+        levels = {"sold_levels": tuple(sorted((sold_levels or {}).items())),
+                  "new_levels": tuple(sorted((new_levels or {}).items())), "level_days": level_days}
     if not priced:
-        return History(sold_per_day=sold_per_day, total_sold=total_sold)
+        return History(sold_per_day=sold_per_day, total_sold=total_sold, **levels)
 
     prices = [p for _, p in priced]
     ref = median(prices)
@@ -112,21 +142,62 @@ def build_history(points: list[tuple[float, int | None, int]], span_hours: float
             trend = (median(recent) / base_price - 1) / days
 
     return History(n_snaps=len(priced), ref_price=round(ref), trend_per_day=trend, cv=cv,
-                   sold_per_day=sold_per_day, total_sold=total_sold)
+                   sold_per_day=sold_per_day, total_sold=total_sold, **levels)
 
 
-def _deposit(vendor: int | None, qty: int, is_commodity: bool, fees: HouseFees) -> int:
-    """Deposit put at risk for one listing period: one stack for stackable goods,
-    one auction per item for gear.
+def demand_at(hist: History, price: int) -> tuple[float, float | None, float]:
+    """What to expect when listing at `price`: (units a day you sell, share of
+    sales that reach that price, undercut pressure).
+
+    Sales at lower prices do not help you, so only those at `price` or above
+    count. Of that demand, listings other sellers post at the same price after
+    you take theirs first (newest sells first); pressure is their share of it.
+    A tenth of the demand is kept as a floor: a buried listing still sells
+    occasionally.
+    """
+    share = hist.share_sold_at(price)
+    reach = (hist.sold_per_day or 0.0) * (1.0 if share is None else share)
+    if reach <= 0:
+        return 0.0, share, 0.0
+    incoming = hist.new_per_day_at(price)
+    return max(reach - incoming, reach * 0.1), share, incoming / reach
+
+
+def _deposit(vendor: int | None, qty: int, is_commodity: bool, fees: HouseFees,
+             hours: int | None = None) -> int:
+    """Deposit put at risk for one listing of `hours` (default: the full
+    duration): one stack for stackable goods, one auction per item for gear.
 
     Checked in game (2026-11-11, Bronze Shortsword at 2h/8h/24h): the deposit
     is a share of vendor value that grows in step with the duration. The 1
     silver minimum is charged PER AUCTION - five swords posted together for 2h
     cost 5s, although the posting screen quoted 2s 84c.
     """
+    rate = fees.deposit_rate * (hours or fees.listing_hours) / fees.listing_hours
     if is_commodity:
-        return max(fees.min_deposit, round(fees.deposit_rate * (vendor or 0) * qty))
-    return qty * max(fees.min_deposit, round(fees.deposit_rate * (vendor or 0)))
+        return max(fees.min_deposit, round(rate * (vendor or 0) * qty))
+    return qty * max(fees.min_deposit, round(rate * (vendor or 0)))
+
+
+def choose_listing_hours(vendor: int | None, qty: int, is_commodity: bool, fees: HouseFees,
+                         hist: History, pressure: float) -> int:
+    """How long to list for.
+
+    The deposit costs the same per hour at every duration and comes back when
+    the item sells, so the longest listing loses the least on average - a
+    short one simply expires more often. The exception is a trade you may
+    have to reprice: cancelling forfeits the deposit, so a shorter listing
+    caps what you can lose. Where the 1s minimum applies either way, longer
+    is free.
+    """
+    full = fees.listing_hours
+    if full <= SHORT_LISTING:
+        return full
+    if _deposit(vendor, qty, is_commodity, fees, SHORT_LISTING) == _deposit(vendor, qty, is_commodity, fees):
+        return full
+    falling = hist.trend_per_day is not None and hist.trend_per_day < -0.05
+    jumpy = hist.cv is not None and hist.cv > 0.25
+    return SHORT_LISTING if falling or jumpy or pressure >= 0.5 else full
 
 
 def expected_expiries(days_to_sell: float, listing_hours: float) -> float:
@@ -142,9 +213,11 @@ def expected_expiries(days_to_sell: float, listing_hours: float) -> float:
     return survive / (1 - survive)
 
 
-def assess_risk(strategy: str, days_to_sell: float, hist: History) -> tuple[int, str, list[str]]:
-    """0-100 score from four things: how fast it sells, how much evidence we
-    have, how jumpy the price is, and which way it is heading."""
+def assess_risk(strategy: str, days_to_sell: float, hist: History, share: float | None = None,
+                pressure: float = 0.0) -> tuple[int, str, list[str]]:
+    """0-100 score from how fast it sells, how much evidence we have, how jumpy
+    the price is, which way it is heading, how often buyers pay this much, and
+    how much competing stock is posted at the same price."""
     score = 0
     reasons: list[str] = []
 
@@ -186,6 +259,16 @@ def assess_risk(strategy: str, days_to_sell: float, hist: History) -> tuple[int,
             score += 10
             reasons.append(f"Price drifting down {abs(hist.trend_per_day):.0%} a day")
 
+    if share is not None and share < 0.25:
+        score += 10
+        reasons.append(f"Only {share:.0%} of sales reach this price")
+    if pressure >= 1:
+        score += 25
+        reasons.append("New listings at this price arrive faster than it sells")
+    elif pressure >= 0.5:
+        score += 10
+        reasons.append("Steady stream of new listings at this price")
+
     if strategy == "DIP":
         score += 15
         reasons.append("Relies on the price recovering")
@@ -204,16 +287,20 @@ def _risk_level(score: int) -> str:
 
 def _finish(strategy: str, qty: int, max_price: int, cost: int, target: int, days: float,
             hist: History, vendor: int | None, is_commodity: bool, fees: HouseFees,
-            tun: Tuning) -> Signal | None:
+            tun: Tuning, share: float | None = None, pressure: float = 0.0) -> Signal | None:
     # A deposit is refunded on sale and lost on expiry; charge the expected
     # number of expiries before the stock clears.
-    lost_deposits = round(_deposit(vendor, qty, is_commodity, fees) * expected_expiries(days, fees.listing_hours))
+    hours = choose_listing_hours(vendor, qty, is_commodity, fees, hist, pressure)
+    lost_deposits = round(_deposit(vendor, qty, is_commodity, fees, hours) * expected_expiries(days, hours))
     profit = math.floor(qty * target * (1 - fees.cut)) - cost - lost_deposits
     if cost <= 0 or profit < tun.min_profit or profit / cost < tun.min_roi:
         return None
-    score, level, reasons = assess_risk(strategy, days, hist)
+    score, level, reasons = assess_risk(strategy, days, hist, share, pressure)
+    if hours < fees.listing_hours:
+        reasons.append(f"List for {hours}h, not {fees.listing_hours}h: it may need repricing, "
+                       "and cancelling forfeits the deposit")
     return Signal(strategy, qty, max_price, cost, target, profit, round(profit / cost, 4),
-                  round(days, 2), score, level, reasons)
+                  round(days, 2), score, level, reasons, hours)
 
 
 def vendor_signal(levels: list[Level], vendor: int | None, verified: bool, tun: Tuning) -> Signal | None:
@@ -240,20 +327,23 @@ def flip_signal(levels: list[Level], hist: History, vendor: int | None, is_commo
                 fees: HouseFees, tun: Tuning) -> Signal | None:
     if hist.ref_price is None or hist.n_snaps < tun.min_history_snaps or not hist.sold_per_day:
         return None
-    max_units = max(1, int(hist.sold_per_day * tun.horizon_days))
+    most = max(1, int(hist.sold_per_day * tun.horizon_days))
     best: Signal | None = None
     qty = cost = 0
     for i in range(min(len(levels) - 1, tun.max_levels)):
         price, q = levels[i]
         qty += q
         cost += price * q
-        if qty > max_units:
+        if qty > most:
             break  # buying part of a price level leaves the rest undercutting you
         target = min(levels[i + 1][0], hist.ref_price)   # match it: the newest listing sells first
         if target <= price:
             continue
-        sig = _finish("FLIP", qty, price, cost, target, qty / hist.sold_per_day, hist,
-                      vendor, is_commodity, fees, tun)
+        rate, share, pressure = demand_at(hist, target)   # what sells AT the relist price
+        if rate <= 0 or qty > max(1, int(rate * tun.horizon_days)):
+            continue
+        sig = _finish("FLIP", qty, price, cost, target, qty / rate, hist,
+                      vendor, is_commodity, fees, tun, share, pressure)
         if sig and (best is None or sig.profit > best.profit):
             best = sig
     return best
@@ -267,7 +357,10 @@ def dip_signal(levels: list[Level], hist: History, vendor: int | None, is_commod
     if levels[0][0] > ceiling:
         return None
     target = int(hist.ref_price * tun.dip_target)
-    max_units = max(1, int(hist.sold_per_day * tun.horizon_days))
+    rate, share, pressure = demand_at(hist, target)
+    if rate <= 0:
+        return None
+    max_units = max(1, int(rate * tun.horizon_days))
     qty = cost = max_price = 0
     for price, q in levels[: tun.max_levels]:
         if price > ceiling or qty >= max_units:
@@ -283,8 +376,9 @@ def dip_signal(levels: list[Level], hist: History, vendor: int | None, is_commod
     # Everything listed under our relist price has to sell before ours does
     # (stock AT our price is behind us: the newest listing sells first).
     ahead = sum(q for p, q in levels if p < target) - qty
-    days = (max(ahead, 0) + qty) / hist.sold_per_day
-    return _finish("DIP", qty, max_price, cost, target, days, hist, vendor, is_commodity, fees, tun)
+    days = max(ahead, 0) / hist.sold_per_day + qty / rate
+    return _finish("DIP", qty, max_price, cost, target, days, hist, vendor, is_commodity, fees, tun,
+                   share, pressure)
 
 
 def export_signal(levels: list[Level], dest_levels: list[Level], dest_hist: History,
@@ -312,7 +406,10 @@ def export_signal(levels: list[Level], dest_levels: list[Level], dest_hist: Hist
     ) if c]
     target = int(min(ceilings))
     most_to_pay = target * (1 - dest_fees.cut) / (1 + tun.min_roi)
-    max_units = max(1, int(dest_hist.sold_per_day * tun.horizon_days))
+    rate, share, pressure = demand_at(dest_hist, target)
+    if rate <= 0:
+        return None
+    max_units = max(1, int(rate * tun.horizon_days))
     qty = cost = max_price = 0
     for price, q in levels[: tun.max_levels]:
         if price > most_to_pay or qty >= max_units:
@@ -323,10 +420,12 @@ def export_signal(levels: list[Level], dest_levels: list[Level], dest_hist: Hist
         max_price = price
     if qty == 0:
         return None
-    sig = _finish("EXPORT", qty, max_price, cost, target, qty / dest_hist.sold_per_day, dest_hist,
-                  vendor, is_commodity, dest_fees, tun)
-    deposit = _deposit(vendor, qty, is_commodity, dest_fees)
-    if sig is None or sig.profit < deposit:   # must survive one listing expiring unsold
+    sig = _finish("EXPORT", qty, max_price, cost, target, qty / rate, dest_hist,
+                  vendor, is_commodity, dest_fees, tun, share, pressure)
+    if sig is None:
+        return None
+    deposit = _deposit(vendor, qty, is_commodity, dest_fees, sig.list_hours)
+    if sig.profit < deposit:   # must survive one listing expiring unsold
         return None
     score, extra = sig.risk_score, []
     if deposit * 2 > sig.profit:
@@ -336,7 +435,7 @@ def export_signal(levels: list[Level], dest_levels: list[Level], dest_hist: Hist
     if buyer:
         reasons.append(f"{buyer.capitalize()} pays {format_money(buyer_price)} at home" if buyer_price
                        else f"Not listed on the {buyer.capitalize()} house")
-    reasons.append(f"Deposit at stake: {format_money(deposit)} per {dest_fees.listing_hours}h")
+    reasons.append(f"Deposit at stake: {format_money(deposit)} per {sig.list_hours}h listing")
     return replace(sig, risk_score=score, risk_level=_risk_level(score),
                    reasons=reasons + sig.reasons + extra)
 

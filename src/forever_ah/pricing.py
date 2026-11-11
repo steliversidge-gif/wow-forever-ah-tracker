@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 from collections.abc import Iterable
 
@@ -60,3 +61,18 @@ def format_money(copper: float | None) -> str:
     if c or not parts:
         parts.append(f"{c}c")
     return sign + " ".join(parts)
+
+
+def squash_levels(levels: dict[int, float], keep: int = 4) -> str | None:
+    """JSON [[price, units], ...] with at most `keep` price points, for compact storage.
+
+    The two closest prices are merged (at their weighted average) until it fits.
+    """
+    points = sorted((p, q) for p, q in levels.items() if q > 0)
+    while len(points) > keep:
+        i = min(range(len(points) - 1), key=lambda k: points[k + 1][0] / max(points[k][0], 1))
+        (p1, q1), (p2, q2) = points[i], points[i + 1]
+        points[i:i + 2] = [(round((p1 * q1 + p2 * q2) / (q1 + q2)), q1 + q2)]
+    if not points:
+        return None
+    return json.dumps([[p, round(q, 2)] for p, q in points], separators=(",", ":"))

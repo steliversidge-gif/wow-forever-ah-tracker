@@ -16,7 +16,8 @@ from importlib import resources
 from itertools import groupby
 from pathlib import Path
 
-from forever_ah.collector import tracked_houses, utcnow
+from forever_ah import scorecard
+from forever_ah.collector import measured_rates, tracked_houses, utcnow
 from forever_ah.config import Settings
 
 log = logging.getLogger(__name__)
@@ -68,7 +69,7 @@ def export_house(conn: sqlite3.Connection, house_id: int, data_dir: Path, settin
         for r in conn.execute(
             f"SELECT s.variant_id, v.item_id, {NAME_SQL} AS name, i.quality, s.strategy, s.buy_qty, "
             "s.buy_max_price, s.buy_cost, s.sell_price, s.profit, s.roi, s.days_to_sell, s.risk_score, "
-            "s.risk_level, s.reasons, ROUND(m.sold_per_day, 2) AS sold_per_day, m.ref_price "
+            "s.risk_level, s.reasons, s.list_hours, ROUND(m.sold_per_day, 2) AS sold_per_day, m.ref_price "
             "FROM signals s JOIN variants v ON v.variant_id = s.variant_id "
             "LEFT JOIN items i ON i.item_id = v.item_id "
             "LEFT JOIN market m ON m.house_id = s.house_id AND m.variant_id = s.variant_id "
@@ -110,6 +111,30 @@ def export_house(conn: sqlite3.Connection, house_id: int, data_dir: Path, settin
     for n, chunk in enumerate(chunks):
         _write(data_dir / f"hist-{house_id}-{n}.json", chunk)
     return {"n_items": len(market), "n_signals": len(signals)}
+
+
+def sales_by_hour(conn: sqlite3.Connection, house_id: int) -> list[dict]:
+    """Average value sold per hourly snapshot, by hour of the day (UTC), for the "when things sell" chart.
+
+    Only snapshots scored with the current inference (those with a rate tally) count.
+    """
+    return [
+        {"hour": r[0], "snapshots": r[1], "value": round(r[2] / r[1])}
+        for r in conn.execute(
+            "SELECT CAST(strftime('%H', s.published_at) AS INTEGER) AS hour, COUNT(DISTINCT s.snapshot_id), "
+            "SUM(i.sold_value) FROM snapshots s JOIN item_stats i ON i.house_id = s.house_id "
+            "AND i.snapshot_id = s.snapshot_id WHERE s.house_id = ? AND s.snapshot_id IN "
+            "(SELECT snapshot_id FROM rate_counts WHERE house_id = ?) GROUP BY hour ORDER BY hour",
+            (house_id, house_id))
+    ]
+
+
+def base_rates(conn: sqlite3.Connection, house_id: int) -> dict:
+    """The sale / withdrawal / repost base rates in use for a house and the sample behind them."""
+    rates, pooled = measured_rates(conn, house_id)
+    out = {k: round(v, 4) for k, v in rates._asdict().items()}
+    out["sample"] = {kind: c.front_n + c.behind_n for kind, c in pooled.items()}
+    return out
 
 
 def setup_reference(conn: sqlite3.Connection, house_ids: list[int], limit: int = 8) -> list[dict]:
@@ -179,7 +204,9 @@ def export_site(conn: sqlite3.Connection, settings: Settings) -> Path:
             undecided.setdefault(house["faction"], []).append(house_id)
         houses.append({"id": house_id, "name": house["name"], "faction": house["faction"],
                        "slot": house["slot"], "pinned": pinned, "n_snaps": snap[0],
-                       "published_at": _epoch(snap[1]), "first_snapshot": _epoch(snap[2]), **counts})
+                       "published_at": _epoch(snap[1]), "first_snapshot": _epoch(snap[2]),
+                       "sales_by_hour": sales_by_hour(conn, house_id), "rates": base_rates(conn, house_id),
+                       **counts})
 
     fees = settings.fees
     _write(data_dir / "meta.json", {
@@ -191,6 +218,7 @@ def export_site(conn: sqlite3.Connection, settings: Settings) -> Path:
                  "min_deposit": fees.min_deposit, "listing_hours": fees.listing_hours},
         "home_faction": settings.home_faction,
         "houses": houses,
+        "scorecard": scorecard.summary(conn),
         "setup": {f: setup_reference(conn, ids) for f, ids in undecided.items() if len(ids) > 1},
     })
     log.info("Dashboard written to %s (%d house(s))", dist, len(houses))

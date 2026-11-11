@@ -9,6 +9,9 @@ tallied into one small summary row per item per hourly snapshot.
               inferred from the diff (sold, cancelled, expired, new)
   market      latest per-item summary, rebuilt each run   } what the dashboard
   signals     buy/sell recommendations, rebuilt each run  } export reads
+  signal_log  one row per recommendation when first made, scored later against
+              what the market then did (the scorecard)
+  rate_counts hourly tallies the sale / expiry / repost base rates are re-measured from
 """
 
 from __future__ import annotations
@@ -16,7 +19,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS houses (
@@ -87,6 +90,8 @@ CREATE TABLE IF NOT EXISTS item_stats (
     cancelled_qty INTEGER NOT NULL DEFAULT 0,
     expired_qty   INTEGER NOT NULL DEFAULT 0,
     new_qty       INTEGER NOT NULL DEFAULT 0,
+    sold_levels   TEXT,                   -- JSON [[price, units], ...]: what the sold units went for
+    new_levels    TEXT,                   -- JSON [[price, units], ...]: what newly listed units ask
     PRIMARY KEY (house_id, variant_id, snapshot_id)
 ) WITHOUT ROWID;
 
@@ -121,9 +126,50 @@ CREATE TABLE IF NOT EXISTS signals (
     risk_score    INTEGER NOT NULL,
     risk_level    TEXT NOT NULL,          -- NONE | LOW | MEDIUM | HIGH
     reasons       TEXT NOT NULL,          -- JSON list of plain-English reasons
+    list_hours    INTEGER,                -- suggested listing duration (NULL for vendor sales)
     PRIMARY KEY (house_id, variant_id, strategy)
 ) WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS signal_log (
+    log_id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    house_id      INTEGER NOT NULL,       -- where to buy
+    sell_house_id INTEGER NOT NULL,       -- where to list (Blackwater for EXPORT)
+    variant_id    INTEGER NOT NULL,
+    strategy      TEXT NOT NULL,
+    issued_at     TEXT NOT NULL,          -- UTC, publish time of the snapshot it was based on
+    buy_qty       INTEGER NOT NULL,
+    sell_price    INTEGER NOT NULL,
+    days_to_sell  REAL NOT NULL,
+    risk_level    TEXT NOT NULL,
+    outcome       TEXT,                   -- NULL until scored: ON_TIME | LATE | MISSED
+    filled_share  REAL,                   -- share of buy_qty the market took at the sell price
+    any_price_ok  INTEGER,                -- 1 if at least buy_qty units sold at ANY price
+    hours_to_fill REAL
+);
+CREATE INDEX IF NOT EXISTS idx_signal_log_key ON signal_log (house_id, variant_id, strategy, issued_at);
+
+CREATE TABLE IF NOT EXISTS rate_counts (
+    house_id       INTEGER NOT NULL,
+    snapshot_id    INTEGER NOT NULL,
+    kind           TEXT NOT NULL,         -- stack | gear
+    behind_n       INTEGER NOT NULL,      -- listings that could not sell, with over 2h left
+    behind_gone    INTEGER NOT NULL,      --   ...that vanished anyway: withdrawals
+    front_n        INTEGER NOT NULL,      -- front-of-queue listings with over 2h left
+    front_gone     INTEGER NOT NULL,      --   ...that vanished with no identical repost
+    lapsed_n       INTEGER NOT NULL,      -- front-of-queue listings that ran out of time
+    lapsed_reposted INTEGER NOT NULL,     --   ...and came straight back identical
+    PRIMARY KEY (house_id, snapshot_id, kind)
+) WITHOUT ROWID;
 """
+
+# Statements that bring an older database up to each version.
+MIGRATIONS = {
+    2: (
+        "ALTER TABLE item_stats ADD COLUMN sold_levels TEXT",
+        "ALTER TABLE item_stats ADD COLUMN new_levels TEXT",
+        "ALTER TABLE signals ADD COLUMN list_hours INTEGER",
+    ),
+}
 
 
 def connect(path: Path) -> sqlite3.Connection:
@@ -137,6 +183,10 @@ def connect(path: Path) -> sqlite3.Connection:
     if version > SCHEMA_VERSION:
         raise RuntimeError(f"Database schema v{version} is newer than this code (v{SCHEMA_VERSION}).")
     if version < SCHEMA_VERSION:
+        if version:  # an existing database: add what newer versions introduced
+            for step in range(version + 1, SCHEMA_VERSION + 1):
+                for statement in MIGRATIONS.get(step, ()):
+                    conn.execute(statement)
         conn.executescript(SCHEMA)
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         conn.commit()

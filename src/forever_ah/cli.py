@@ -9,7 +9,7 @@ import logging
 import os
 import sys
 
-from forever_ah import analyse, collector, db, export
+from forever_ah import analyse, collector, db, export, scorecard
 from forever_ah.blizzard import BlizzardClient
 from forever_ah.config import load_settings
 
@@ -31,6 +31,9 @@ def cmd_run(args) -> int:
         analyse.analyse_house(conn, house_id, settings)
     if houses:
         analyse.analyse_exports(conn, settings)
+    if updated:   # new market data: score what has come due, then log what is recommended now
+        scorecard.score(conn)
+        scorecard.log_signals(conn, settings)
 
     dist_missing = not (settings.dist_path / "data" / "meta.json").exists()
     if updated or args.reanalyse or dist_missing:
