@@ -13,7 +13,7 @@ home_faction = "horde"   # the house the dashboard opens on: alliance, horde or 
 #   -1  = not interested: do not track this faction
 #   id  = the house id to track (e.g. 110)
 [houses]
-alliance = 0
+alliance = 111
 horde = 114
 blackwater = 117
 
