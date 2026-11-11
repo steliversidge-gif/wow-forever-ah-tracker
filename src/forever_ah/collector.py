@@ -189,7 +189,9 @@ def resolve_items(conn: sqlite3.Connection, client: BlizzardClient, limit: int =
     retry_before = (datetime.now(UTC) - timedelta(days=1)).strftime(TIME_FMT)
     todo = [r[0] for r in conn.execute(
         "SELECT DISTINCT v.item_id FROM variants v LEFT JOIN items i ON i.item_id = v.item_id "
-        "WHERE i.item_id IS NULL OR (i.name IS NULL AND i.attempts < 3 AND i.fetched_at < ?) LIMIT ?",
+        # An unnamed item gets one prompt retry, then one more a day later.
+        "WHERE i.item_id IS NULL OR (i.name IS NULL AND (i.attempts < 2 OR "
+        "(i.attempts < 3 AND i.fetched_at < ?))) LIMIT ?",
         (retry_before, limit))]
     if not todo:
         return 0

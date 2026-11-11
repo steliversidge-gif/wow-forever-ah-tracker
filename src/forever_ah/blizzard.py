@@ -11,6 +11,7 @@ Verified against the live API on 2026-11-11:
 from __future__ import annotations
 
 import logging
+import re
 import time
 from datetime import UTC
 from email.utils import parsedate_to_datetime
@@ -23,6 +24,33 @@ log = logging.getLogger(__name__)
 
 TOKEN_URL = "https://oauth.battle.net/token"
 TIMEOUT = (10, 180)
+WOWHEAD_ITEM_URL = "https://www.wowhead.com/forever/item={item_id}&xml"
+
+
+def parse_wowhead_item(xml: str) -> dict | None:
+    """Turn Wowhead's item XML into the fields we use, shaped like Blizzard's item JSON."""
+    name = re.search(r"<name><!\[CDATA\[(.*?)\]\]></name>", xml, re.S)
+    if "<error>" in xml or not name:
+        return None
+
+    def text(tag: str) -> str | None:
+        m = re.search(rf"<{tag}\b[^>]*>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?</{tag}>", xml, re.S)
+        return m.group(1) if m and m.group(1) else None
+
+    def number(key: str) -> int | None:
+        m = re.search(rf'"{key}":(\d+)', xml)
+        return int(m.group(1)) if m else None
+
+    level = text("level")
+    return {
+        "name": name.group(1),
+        "quality": {"name": text("quality")},
+        "item_class": {"name": text("class")},
+        "item_subclass": {"name": text("subclass")},
+        "level": int(level) if level and level.isdigit() else None,
+        "required_level": number("reqlevel"),
+        "sell_price": number("sellprice"),
+    }
 
 
 class BlizzardError(RuntimeError):
@@ -118,4 +146,19 @@ class BlizzardClient:
                 return r.json(), ns
             if r.status_code != 404:
                 raise BlizzardError(f"Item {item_id} returned HTTP {r.status_code} from {ns}")
-        return None, None
+        return self._wowhead_item(item_id)
+
+    def _wowhead_item(self, item_id: int) -> tuple[dict | None, str | None]:
+        """Last resort for items Blizzard's API does not serve yet (mostly new Forever items).
+
+        Unofficial, so any failure just leaves the item unnamed. Uses a plain
+        request, never the session's Blizzard token.
+        """
+        try:
+            r = requests.get(WOWHEAD_ITEM_URL.format(item_id=item_id), timeout=20,
+                             headers={"User-Agent": "forever-ah-tracker"})
+            data = parse_wowhead_item(r.text) if r.status_code == 200 else None
+        except requests.RequestException as exc:
+            log.debug("Wowhead lookup for item %s failed: %s", item_id, exc)
+            return None, None
+        return (data, "wowhead-forever") if data else (None, None)

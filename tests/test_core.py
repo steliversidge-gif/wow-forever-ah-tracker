@@ -149,3 +149,19 @@ def test_thin_history_keeps_recent_and_preserves_sales_total():
     assert sum(p[3] for p in thin) == 100
     assert thin[-49:] == points[-49:]
     assert len(thin) < len(points)
+
+
+def test_parse_wowhead_item():
+    from forever_ah.blizzard import parse_wowhead_item
+
+    xml = ('<?xml version="1.0"?><wowhead><item id="277072"><name><![CDATA[Al\'Aketh Pants]]></name>'
+           '<level>11</level><quality id="2">Uncommon</quality><class id="4"><![CDATA[Armor]]></class>'
+           '<subclass id="2"><![CDATA[Leather Armor]]></subclass>'
+           '<json><![CDATA["id":277072,"level":11,"reqlevel":6]]></json>'
+           '<jsonEquip><![CDATA["buyprice":782,"reqlevel":6,"sellprice":156]]></jsonEquip></item></wowhead>')
+    item = parse_wowhead_item(xml)
+    assert item["name"] == "Al'Aketh Pants"
+    assert item["quality"]["name"] == "Uncommon"
+    assert item["item_class"]["name"] == "Armor"
+    assert (item["level"], item["required_level"], item["sell_price"]) == (11, 6, 156)
+    assert parse_wowhead_item("<wowhead><error>Item not found!</error></wowhead>") is None

@@ -191,7 +191,7 @@ async function viewItem(variantId) {
   view.innerHTML = `
     <h1 class="${qClass(x.quality)}">${esc(x.name)}</h1>
     <p class="lead">${esc([x.quality, x.item_class].filter(Boolean).join(' · '))}
-      · <a href="https://www.wowhead.com/classic/item=${x.item_id}" target="_blank" rel="noopener">Wowhead</a>
+      · <a href="https://www.wowhead.com/forever/item=${x.item_id}" target="_blank" rel="noopener">Wowhead</a>
       · ${esc(houseLabel(h))}</p>
     ${sigs.map(s => `<div class="advice">
       <p><b>Buy ${num(s.buy_qty)}</b> at up to <b>${money(s.buy_max_price)}</b> each (${money(s.buy_cost)} in total).
