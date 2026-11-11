@@ -22,9 +22,9 @@ blackwater = 0
 [fees]
 faction_cut = 0.05           # share of the sale price the house keeps
 neutral_cut = 0.15           # Blackwater
-deposit_rate = 0.30          # deposit as a share of vendor value, 24h listing
+deposit_rate = 0.60          # deposit as a share of vendor value, 24h listing (checked in game 2026-11-11)
 neutral_deposit_rate = 0.75
-min_deposit = 100            # copper; reported 1 silver minimum per listing
+min_deposit = 100            # copper; 1 silver minimum per listing (checked in game 2026-11-11)
 listing_hours = 24
 
 [tuning]
