@@ -15,7 +15,7 @@ home_faction = "horde"   # the house the dashboard opens on: alliance, horde or 
 [houses]
 alliance = 0
 horde = 114
-blackwater = 0
+blackwater = 117
 
 # Fee assumptions. Blizzard has not published Forever's rates; these are Classic's.
 # Check them against the in-game auction house and adjust.
@@ -23,7 +23,7 @@ blackwater = 0
 faction_cut = 0.05           # share of the sale price the house keeps
 neutral_cut = 0.15           # Blackwater
 deposit_rate = 0.60          # deposit as a share of vendor value, 24h listing (checked in game 2026-11-11)
-neutral_deposit_rate = 0.75
+neutral_deposit_rate = 3.00  # Blackwater, 24h listing (checked in game 2026-11-11)
 min_deposit = 100            # copper; 1 silver minimum per listing (checked in game 2026-11-11)
 listing_hours = 24
 
