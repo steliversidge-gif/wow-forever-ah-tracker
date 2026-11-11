@@ -53,7 +53,7 @@ lists its reasons in plain English. All definitions live in one file,
 ## How it works
 
 ```
-GitHub Actions (hourly)
+GitHub Actions (hourly; until GitHub's scheduler is seen working, each run starts the next)
   ├─ download the SQLite database from the "state" release
   ├─ forever-ah run
   │    ├─ collect   Blizzard API → diff against live listings → hourly per-item summary

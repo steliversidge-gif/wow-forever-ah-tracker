@@ -3,14 +3,22 @@ name: Collect and publish
 # Runs the collector on GitHub's machines so nothing depends on a home PC.
 # The SQLite database travels between runs as an asset on a release named
 # "state"; the dashboard is published to GitHub Pages.
+#
+# Timing: Blizzard publishes a new snapshot hourly at about :25:25.
+#
+# GitHub's scheduler did not fire at all in this repository's first hours, so
+# as a stand-in the workflow restarts itself: the "next" job waits until :27
+# and starts the following run. It steps aside for good the moment GitHub's
+# schedule is seen working. If collection ever stops (schedule silent and no
+# chain), press "Run workflow" once in the Actions tab to restart the chain.
 
 on:
   schedule:
-    # Blizzard publishes a new snapshot hourly at about :25:25. GitHub starts
-    # scheduled runs anywhere from on time to several minutes late, so the
-    # tries bracket the publish time: :23 catches it when the scheduler slips,
-    # :26 when it is punctual, and :30 / :40 / :58 are catch-ups. An unchanged
-    # snapshot costs one cheap 304 per house and skips the upload and deploy.
+    # GitHub starts scheduled runs anywhere from on time to several minutes
+    # late, so the tries bracket the publish time: :23 catches it when the
+    # scheduler slips, :26 when it is punctual, and :30 / :40 / :58 are
+    # catch-ups. An unchanged snapshot costs one cheap 304 per house and skips
+    # the upload and deploy.
     - cron: "23,26,30,40,58 * * * *"
   workflow_dispatch:
   push:
@@ -21,10 +29,7 @@ permissions:
   contents: write   # release asset holding the database
   pages: write
   id-token: write
-
-concurrency:
-  group: collect
-  cancel-in-progress: false
+  actions: write    # lets a run start the next one
 
 env:
   GH_TOKEN: ${{ github.token }}
@@ -33,6 +38,9 @@ jobs:
   collect:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    concurrency:      # one collector at a time: they share the database
+      group: collect
+      cancel-in-progress: false
     outputs:
       updated: ${{ steps.run.outputs.updated }}
     steps:
@@ -64,7 +72,8 @@ jobs:
         env:
           BLIZZARD_CLIENT_ID: ${{ secrets.BLIZZARD_CLIENT_ID }}
           BLIZZARD_CLIENT_SECRET: ${{ secrets.BLIZZARD_CLIENT_SECRET }}
-        run: python -m forever_ah run ${{ github.event_name != 'schedule' && '--reanalyse' || '' }}
+        # A push may have changed settings or code, so it rebuilds every recommendation.
+        run: python -m forever_ah run ${{ github.event_name == 'push' && '--reanalyse' || '' }}
 
       - name: Save database
         if: steps.run.outputs.updated == 'true'
@@ -84,7 +93,7 @@ jobs:
 
       - name: Keep the schedule alive
         # GitHub pauses scheduled workflows after 60 days without a commit.
-        if: github.event_name == 'schedule'
+        if: github.event_name != 'push'
         run: |
           if [ $(( $(date +%s) - $(git log -1 --format=%ct) )) -gt $((30 * 86400)) ]; then
             date -u +%F > .github/heartbeat
@@ -105,3 +114,41 @@ jobs:
     steps:
       - id: deployment
         uses: actions/deploy-pages@v5
+
+  next:
+    # Stand-in for GitHub's scheduler: wait for Blizzard's next snapshot, then
+    # start the next run - unless the real schedule has started working, in
+    # which case do nothing and let it take over. Only the newest waiter
+    # survives, so pushes and manual runs never multiply the chain.
+    needs: collect
+    if: ${{ !cancelled() && github.event_name != 'schedule' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    concurrency:
+      group: collect-next
+      cancel-in-progress: true
+    env:
+      GH_REPO: ${{ github.repository }}
+      UPDATED: ${{ needs.collect.outputs.updated }}
+    steps:
+      - name: Wait, then start the next run
+        run: |
+          now=$(date -u +%s)
+          minute=$(( (now % 3600) / 60 ))
+          if [ "$UPDATED" != "true" ] && [ "$minute" -ge 26 ] && [ "$minute" -lt 50 ]; then
+            # Nothing new although the snapshot was due: it is late, so look again shortly.
+            wait=300
+          else
+            target=$(( now - now % 3600 + 27 * 60 ))
+            if [ "$target" -le $(( now + 20 )) ]; then target=$(( target + 3600 )); fi
+            wait=$(( target - now ))
+          fi
+          echo "Starting the next run in ${wait}s unless GitHub's schedule takes over"
+          sleep "$wait"
+          since=$(date -u -d '3 hours ago' +%Y-%m-%dT%H:%M:%SZ)
+          scheduled=$(gh run list --workflow collect.yml --event schedule --created ">$since" --limit 1 --json databaseId -q 'length')
+          if [ "${scheduled:-0}" -gt 0 ]; then
+            echo "GitHub's schedule is running: stepping aside."
+          else
+            gh workflow run collect.yml --ref "${{ github.ref_name }}"
+          fi
