@@ -6,11 +6,12 @@ name: Collect and publish
 
 on:
   schedule:
-    # Blizzard publishes a new snapshot roughly hourly (about :25 past). An
-    # on-time run at :28, a late run at :38, and a catch-up at :58 in case the
-    # snapshot or GitHub's scheduler slipped. An unchanged snapshot costs one
-    # cheap 304 per house and skips the upload and deploy.
-    - cron: "28,38,58 * * * *"
+    # Blizzard publishes a new snapshot hourly at about :25:25. GitHub starts
+    # scheduled runs anywhere from on time to several minutes late, so the
+    # tries bracket the publish time: :23 catches it when the scheduler slips,
+    # :26 when it is punctual, and :30 / :40 / :58 are catch-ups. An unchanged
+    # snapshot costs one cheap 304 per house and skips the upload and deploy.
+    - cron: "23,26,30,40,58 * * * *"
   workflow_dispatch:
   push:
     branches: [main]
