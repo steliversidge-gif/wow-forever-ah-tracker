@@ -182,6 +182,7 @@ def export_site(conn: sqlite3.Connection, settings: Settings) -> Path:
         "min_history_snaps": settings.tuning.min_history_snaps,
         "fees": {"faction_cut": fees.faction_cut, "neutral_cut": fees.neutral_cut,
                  "min_deposit": fees.min_deposit, "listing_hours": fees.listing_hours},
+        "home_faction": settings.home_faction,
         "houses": houses,
         "setup": {f: setup_reference(conn, ids) for f, ids in undecided.items() if len(ids) > 1},
     })

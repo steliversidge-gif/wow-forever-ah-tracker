@@ -45,6 +45,7 @@ class Settings:
     region: str = "eu"
     ruleset: int = 2
     locale: str = "en_GB"
+    home_faction: str = "alliance"
     houses: dict[str, int] = field(default_factory=lambda: {f: 0 for f in FACTIONS})
     fees: Fees = field(default_factory=Fees)
     tuning: Tuning = field(default_factory=Tuning)
@@ -78,11 +79,15 @@ def load_settings(root: Path | None = None) -> Settings:
         raw = tomllib.loads(cfg.read_text(encoding="utf-8"))
     houses = {f: 0 for f in FACTIONS}
     houses.update({k: int(v) for k, v in raw.get("houses", {}).items() if k in FACTIONS})
+    home = str(raw.get("home_faction", "alliance")).lower()
+    if home not in FACTIONS:
+        raise ValueError(f"home_faction in config.toml must be one of {list(FACTIONS)}, not {home!r}")
     return Settings(
         root=root,
         region=str(raw.get("region", "eu")).lower(),
         ruleset=int(raw.get("ruleset", 2)),
         locale=str(raw.get("locale", "en_GB")),
+        home_faction=home,
         houses=houses,
         fees=_pick(Fees, raw.get("fees", {})),
         tuning=_pick(Tuning, raw.get("tuning", {})),

@@ -4,6 +4,7 @@
 region = "eu"
 ruleset = 2          # 1 = PvP, 2 = Normal, 3 = Roleplay, 15 = Roleplay PvP
 locale = "en_GB"
+home_faction = "horde"   # the house the dashboard opens on: alliance, horde or blackwater
 
 # Which auction house is yours, per faction. Blizzard's API lists every house for
 # every ruleset without saying which is which, so you confirm it once by comparing
@@ -13,7 +14,7 @@ locale = "en_GB"
 #   id  = the house id to track (e.g. 110)
 [houses]
 alliance = 0
-horde = 0
+horde = 114
 blackwater = 0
 
 # Fee assumptions. Blizzard has not published Forever's rates; these are Classic's.

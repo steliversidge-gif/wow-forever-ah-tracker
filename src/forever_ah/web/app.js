@@ -409,6 +409,7 @@ async function start() {
     return;
   }
   const order = { alliance: 0, horde: 1, blackwater: 2 };
+  order[S.meta.home_faction] = -1;   // the player's own faction opens first
   S.meta.houses.sort((a, b) => (b.pinned - a.pinned) || (order[a.faction] - order[b.faction]) || (a.id - b.id));
   const sel = $('#house');
   sel.innerHTML = S.meta.houses.map(h => `<option value="${h.id}">${esc(houseLabel(h))}</option>`).join('');
