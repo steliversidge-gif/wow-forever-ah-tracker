@@ -228,7 +228,8 @@ def test_export_prices_at_the_lowest_ceiling_and_nets_the_cut():
     assert sig.strategy == "EXPORT"
     assert sig.sell_price == 1000                       # what it sold for there, below both asks
     assert (sig.buy_qty, sig.buy_max_price, sig.buy_cost) == (10, 500, 5000)
-    assert sig.profit == 10 * 850 - 5000                # 15% cut, sells within a day so no lost deposit
+    # 15% cut, less the 3s deposit times the 16% chance-weighted expiries of a half-day sale
+    assert sig.profit == 10 * 850 - 5000 - 47
     assert sig.reasons[0].startswith("List on Blackwater")
     assert "Alliance pays 11s at home" in sig.reasons
 
@@ -262,3 +263,22 @@ def test_export_item_missing_from_buyers_house():
     sig = export(buyer_price=None)
     assert sig.sell_price == 1000
     assert "Not listed on the Alliance house" in sig.reasons
+
+
+def test_deposit_matches_what_the_game_charged():
+    from forever_ah.signals import _deposit
+
+    horde_24h = HouseFees(cut=0.05, deposit_rate=0.60, min_deposit=100, listing_hours=24)
+    # Bronze Shortsword, vendor value 11s 36c: 6s 81c for one, 34s 8c for five
+    assert _deposit(1136, 1, False, horde_24h) in (681, 682)
+    assert _deposit(1136, 5, False, horde_24h) == 3408
+    assert _deposit(4, 4, True, horde_24h) == 100          # the minimum covers the whole posting
+
+
+def test_expected_expiries():
+    from forever_ah.signals import expected_expiries
+
+    assert expected_expiries(0, 24) == 0
+    assert expected_expiries(0.1, 24) < 0.001              # sells in a couple of hours: expiry is negligible
+    assert 0.55 < expected_expiries(1.0, 24) < 0.60        # a "one day" sale often outlasts a 24h listing
+    assert 2.4 < expected_expiries(3.0, 24) < 2.6

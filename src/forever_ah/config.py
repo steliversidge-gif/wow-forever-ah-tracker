@@ -16,8 +16,8 @@ FACTIONS = ("alliance", "horde", "blackwater")
 class Fees:
     faction_cut: float = 0.05
     neutral_cut: float = 0.15
-    deposit_rate: float = 0.30
-    neutral_deposit_rate: float = 0.75
+    deposit_rate: float = 0.60          # share of vendor value for a 24h listing, as charged in game
+    neutral_deposit_rate: float = 3.00
     min_deposit: int = 100
     listing_hours: int = 24
 

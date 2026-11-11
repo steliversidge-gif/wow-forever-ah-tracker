@@ -116,10 +116,26 @@ def build_history(points: list[tuple[float, int | None, int]], span_hours: float
 
 
 def _deposit(vendor: int | None, qty: int, is_commodity: bool, fees: HouseFees) -> int:
-    """Deposit put at risk when relisting: one stack for commodities, one listing per item for gear."""
-    if is_commodity:
-        return max(fees.min_deposit, round(fees.deposit_rate * (vendor or 0) * qty))
-    return qty * max(fees.min_deposit, round(fees.deposit_rate * (vendor or 0)))
+    """Deposit put at risk by posting `qty` units together for one listing period.
+
+    Checked in game (2026-11-11, Bronze Shortsword x1 and x5 at 2h/8h/24h): the
+    deposit is a share of vendor value that grows in step with the duration,
+    and the 1 silver minimum applies to the whole posting, gear included.
+    """
+    return max(fees.min_deposit, round(fees.deposit_rate * (vendor or 0) * qty))
+
+
+def expected_expiries(days_to_sell: float, listing_hours: float) -> float:
+    """How many times a listing is expected to run out before it sells.
+
+    Treats the sale as equally likely in any hour (so `days_to_sell` is an
+    average, not a promise): a listing expected to take a day still has a 37%
+    chance of outlasting a 24h listing.
+    """
+    if days_to_sell <= 0:
+        return 0.0
+    survive = math.exp(-listing_hours / (days_to_sell * 24))
+    return survive / (1 - survive)
 
 
 def assess_risk(strategy: str, days_to_sell: float, hist: History) -> tuple[int, str, list[str]]:
@@ -185,10 +201,9 @@ def _risk_level(score: int) -> str:
 def _finish(strategy: str, qty: int, max_price: int, cost: int, target: int, days: float,
             hist: History, vendor: int | None, is_commodity: bool, fees: HouseFees,
             tun: Tuning) -> Signal | None:
-    # A deposit is refunded on sale and lost on expiry; charge one per listing
-    # period we expect to sit through before the stock clears.
-    expiries = max(0, math.ceil(days * 24 / fees.listing_hours) - 1)
-    lost_deposits = _deposit(vendor, qty, is_commodity, fees) * expiries
+    # A deposit is refunded on sale and lost on expiry; charge the expected
+    # number of expiries before the stock clears.
+    lost_deposits = round(_deposit(vendor, qty, is_commodity, fees) * expected_expiries(days, fees.listing_hours))
     profit = math.floor(qty * target * (1 - fees.cut)) - cost - lost_deposits
     if cost <= 0 or profit < tun.min_profit or profit / cost < tun.min_roi:
         return None
