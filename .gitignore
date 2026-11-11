@@ -1,0 +1,16 @@
+# secrets
+.env
+*.env
+!.env.example
+
+# local data and build output
+data/
+dist/
+
+# python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/

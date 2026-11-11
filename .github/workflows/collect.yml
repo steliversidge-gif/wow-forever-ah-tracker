@@ -1,0 +1,104 @@
+name: Collect and publish
+
+# Runs the collector on GitHub's machines so nothing depends on a home PC.
+# The SQLite database travels between runs as an asset on a release named
+# "state"; the dashboard is published to GitHub Pages.
+
+on:
+  schedule:
+    # Blizzard publishes a new snapshot roughly hourly (about :25 past). Two
+    # tries an hour; an unchanged snapshot costs one cheap 304 per house.
+    - cron: "10,40 * * * *"
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["config.toml", "src/**", "pyproject.toml", ".github/workflows/collect.yml"]
+
+permissions:
+  contents: write   # release asset holding the database
+  pages: write
+  id-token: write
+
+concurrency:
+  group: collect
+  cancel-in-progress: false
+
+env:
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      updated: ${{ steps.run.outputs.updated }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+          cache: pip
+
+      - run: pip install .
+
+      - name: Restore database
+        run: |
+          mkdir -p data
+          if gh release view state >/dev/null 2>&1; then
+            name=$(gh release view state --json assets -q '.assets | sort_by(.createdAt) | last | .name // empty')
+            if [ -n "$name" ]; then
+              gh release download state -p "$name" -O data/forever_ah.db.zst
+              zstd -d --rm data/forever_ah.db.zst
+            fi
+          else
+            gh release create state --title "Collector state" --latest=false \
+              --notes "Database carried between collector runs. Managed by the workflow; do not edit."
+          fi
+
+      - name: Collect, analyse, export
+        id: run
+        env:
+          BLIZZARD_CLIENT_ID: ${{ secrets.BLIZZARD_CLIENT_ID }}
+          BLIZZARD_CLIENT_SECRET: ${{ secrets.BLIZZARD_CLIENT_SECRET }}
+        run: python -m forever_ah run ${{ github.event_name != 'schedule' && '--reanalyse' || '' }}
+
+      - name: Save database
+        if: steps.run.outputs.updated == 'true'
+        run: |
+          asset="forever_ah-${{ github.run_id }}-${{ github.run_attempt }}.db.zst"
+          zstd -T0 -9 data/forever_ah.db -o "$asset"
+          gh release upload state "$asset"
+          # Upload first, then prune: keep the two newest so a failed upload never loses the state.
+          gh release view state --json assets -q '.assets | sort_by(.createdAt) | reverse | .[2:] | .[].name' \
+            | while read -r old; do gh release delete-asset state "$old" -y; done
+
+      - name: Upload dashboard
+        if: steps.run.outputs.updated == 'true'
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: dist
+
+      - name: Keep the schedule alive
+        # GitHub pauses scheduled workflows after 60 days without a commit.
+        if: github.event_name == 'schedule'
+        run: |
+          if [ $(( $(date +%s) - $(git log -1 --format=%ct) )) -gt $((30 * 86400)) ]; then
+            date -u +%F > .github/heartbeat
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add .github/heartbeat
+            git commit -m "chore: monthly heartbeat so the schedule stays enabled"
+            git push
+          fi
+
+  deploy:
+    needs: collect
+    if: needs.collect.outputs.updated == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5

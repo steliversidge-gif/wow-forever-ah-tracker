@@ -1,0 +1,35 @@
+# WoW: Forever AH tracker settings. Nothing secret lives here - API keys go in .env
+# (locally) or GitHub Actions secrets (hosted).
+
+region = "eu"
+ruleset = 2          # 1 = PvP, 2 = Normal, 3 = Roleplay, 15 = Roleplay PvP
+locale = "en_GB"
+
+# Which auction house is yours, per faction. Blizzard's API lists every house for
+# every ruleset without saying which is which, so you confirm it once by comparing
+# prices in game (see the Status page of the dashboard).
+#    0  = not identified yet: track every candidate house so you can compare
+#   -1  = not interested: do not track this faction
+#   id  = the house id to track (e.g. 110)
+[houses]
+alliance = 0
+horde = 0
+blackwater = 0
+
+# Fee assumptions. Blizzard has not published Forever's rates; these are Classic's.
+# Check them against the in-game auction house and adjust.
+[fees]
+faction_cut = 0.05           # share of the sale price the house keeps
+neutral_cut = 0.15           # Blackwater
+deposit_rate = 0.30          # deposit as a share of vendor value, 24h listing
+neutral_deposit_rate = 0.75
+min_deposit = 100            # copper; reported 1 silver minimum per listing
+listing_hours = 24
+
+[tuning]
+lookback_days = 7            # history used for "typical price" and sales per day
+stats_retention_days = 7     # hourly per-item history kept in the database
+horizon_days = 1.0           # never suggest buying more than this many days of sales
+dip_threshold = 0.25         # a "dip" is this far below the typical price
+min_profit = 100             # copper; hide signals below this
+min_roi = 0.05
