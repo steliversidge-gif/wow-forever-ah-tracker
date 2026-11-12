@@ -1,0 +1,19 @@
+name: Wowhead page test
+
+# One-off: can a GitHub runner read an item's web page on Wowhead? Delete after use.
+on:
+  push:
+    paths: [".github/workflows/wowhead-test.yml", ".github/scripts/wowhead_test.py"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - run: pip install requests
+      - run: python .github/scripts/wowhead_test.py
