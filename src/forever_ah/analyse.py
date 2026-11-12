@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 from itertools import groupby
 
 from forever_ah.config import FACTIONS, Settings
-from forever_ah.pricing import junk_ceiling, market_price
+from forever_ah.pricing import junk_ceiling, market_price, median
 from forever_ah.professions import COOLDOWN_DAYS, PROFESSIONS, VENDOR_ONLY, disenchant_yield
 from forever_ah.signals import (
     build_history,
@@ -41,12 +41,41 @@ def load_ladders(conn: sqlite3.Connection, house_id: int) -> dict[int, tuple[int
     return out
 
 
-def without_junk(ladders: dict, history: dict, tun) -> dict:
+def family_caps(conn: sqlite3.Connection, ladders: dict, tun) -> dict[int, float]:
+    """variant_id -> the most it can sensibly cost, judged by its sibling variants.
+
+    Random-suffix gear ("Feral Cloak of the Owl", "... of the Bear") is tracked
+    one variant at a time, and each has so few listings that a silly price is
+    often the only one, with nothing in its own history to show it up. Its
+    siblings do: anything above `family_multiple` times the median sibling's
+    market price is junk. Needs at least three variants on sale.
+    """
+    if not tun.family_multiple:
+        return {}
+    item_of = {r[0]: r[1] for r in conn.execute("SELECT variant_id, item_id FROM variants")}
+    families: dict[int, list[tuple[int, int]]] = {}
+    for variant_id, (_, levels, _) in ladders.items():
+        families.setdefault(item_of.get(variant_id), []).append(
+            (variant_id, market_price(levels, tun.market_fraction)))
+    caps = {}
+    for item_id, members in families.items():
+        if item_id is None or len(members) < 3:
+            continue
+        cap = median([price for _, price in members]) * tun.family_multiple
+        caps.update((variant_id, cap) for variant_id, _ in members)
+    return caps
+
+
+def without_junk(ladders: dict, history: dict, tun, caps: dict | None = None) -> dict:
     """The same ladders with junk-priced listings removed (see pricing.junk_ceiling)."""
     out = {}
     for variant_id, (is_commodity, levels, counts) in ladders.items():
         hist = history.get(variant_id)
         ceiling = junk_ceiling(levels, hist.ref_price if hist else None, tun.junk_multiple, tun.market_fraction)
+        cap = (caps or {}).get(variant_id)
+        if cap is not None:
+            # Never empty the book: if even the cheapest is above the family cap, it alone is kept.
+            ceiling = max(min(ceiling if ceiling is not None else cap, cap), levels[0][0])
         if ceiling is not None and levels[-1][0] > ceiling:
             keep = sum(1 for price, _ in levels if price <= ceiling)
             levels, counts = levels[:keep], counts[:keep]
@@ -54,8 +83,10 @@ def without_junk(ladders: dict, history: dict, tun) -> dict:
     return out
 
 
-def load_history(conn: sqlite3.Connection, house_id: int, settings: Settings):
-    """(variant_id -> History, hours observed, first snapshot id) for the lookback window, or None."""
+def load_history(conn: sqlite3.Connection, house_id: int, settings: Settings, caps: dict | None = None):
+    """(variant_id -> History, hours observed, first snapshot id) for the lookback window, or None.
+
+    caps: variant_id -> price cap from family_caps, if any."""
     since = (datetime.now(UTC) - timedelta(days=settings.tuning.lookback_days)).strftime(TIME_FMT)
     snaps = conn.execute(
         "SELECT snapshot_id, published_at FROM snapshots WHERE house_id = ? AND published_at >= ? "
@@ -89,7 +120,8 @@ def load_history(conn: sqlite3.Connection, house_id: int, settings: Settings):
                         into[price] = into.get(price, 0) + qty
         history[variant_id] = build_history(points, span_hours, sold_levels=sold, new_levels=new,
                                             level_days=level_days,
-                                            junk_multiple=settings.tuning.junk_multiple)
+                                            junk_multiple=settings.tuning.junk_multiple,
+                                            price_cap=(caps or {}).get(variant_id))
     return history, span_hours, snaps[0][0]
 
 
@@ -104,13 +136,15 @@ def analyse_house(conn: sqlite3.Connection, house_id: int, settings: Settings) -
     house = conn.execute("SELECT * FROM houses WHERE house_id = ?", (house_id,)).fetchone()
     fees = house_fees(settings.fees, house["faction"])
 
-    loaded = load_history(conn, house_id, settings)
+    raw_ladders = load_ladders(conn, house_id)
+    caps = family_caps(conn, raw_ladders, tun)
+    loaded = load_history(conn, house_id, settings, caps)
     if loaded is None:
         return 0
     history, span_hours, _ = loaded
 
     vendor = _vendor_prices(conn)
-    ladders = without_junk(load_ladders(conn, house_id), history, tun)
+    ladders = without_junk(raw_ladders, history, tun, caps)
 
     # What each item is (for disenchanting) and the plain, unmodified variant of each item (for materials).
     item_of, base_variant, item_name = {}, {}, {}
@@ -227,12 +261,14 @@ def analyse_exports(conn: sqlite3.Connection, settings: Settings) -> int:
     conn.execute("DELETE FROM signals WHERE strategy = 'EXPORT'")
     pinned = {f: settings.houses.get(f, 0) for f in FACTIONS}
     dest = pinned["blackwater"]
-    loaded = load_history(conn, dest, settings) if dest > 0 else None
+    raw_dest = load_ladders(conn, dest) if dest > 0 else {}
+    caps = family_caps(conn, raw_dest, settings.tuning)
+    loaded = load_history(conn, dest, settings, caps) if dest > 0 else None
     if loaded is None:
         conn.commit()
         return 0
     dest_hist, _, first_snap = loaded
-    dest_ladders = without_junk(load_ladders(conn, dest), dest_hist, settings.tuning)
+    dest_ladders = without_junk(raw_dest, dest_hist, settings.tuning, caps)
     dest_sold_price = {r[0]: r[1] for r in conn.execute(
         "SELECT variant_id, SUM(sold_value) * 1.0 / SUM(sold_qty) FROM item_stats "
         "WHERE house_id = ? AND snapshot_id >= ? GROUP BY variant_id HAVING SUM(sold_qty) > 0",

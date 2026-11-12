@@ -106,34 +106,38 @@ def house_fees(fees: Fees, faction: str) -> HouseFees:
 def build_history(points: list[tuple[float, int | None, int]], span_hours: float,
                   min_span_hours: float = 6.0, sold_levels: dict | None = None,
                   new_levels: dict | None = None, level_days: float | None = None,
-                  junk_multiple: float | None = None) -> History:
+                  junk_multiple: float | None = None, price_cap: float | None = None) -> History:
     """Summarise an item's hourly rows.
 
     points: (time in hours, market price or None, units sold), oldest first.
     span_hours: how long the HOUSE has been observed in the window - an item
     missing from a snapshot was out of stock, which still counts as time.
+    price_cap: the most this item can sensibly cost, judged from outside its
+    own history (see analyse.family_caps). Hours when its only listings were
+    above that are treated as hours with no price.
     """
-    priced = [(t, p) for t, p, _ in points if p]
+    priced = [(t, p) for t, p, _ in points if p and (price_cap is None or p <= price_cap)]
     total_sold = sum(s for _, _, s in points)
     sold_per_day = total_sold / (span_hours / 24) if span_hours >= min_span_hours else None
     levels = {}
     if level_days and level_days >= MIN_LEVEL_DAYS:
         levels = {"sold_levels": tuple(sorted((sold_levels or {}).items())),
                   "new_levels": tuple(sorted((new_levels or {}).items())), "level_days": level_days}
-    if not priced:
-        return History(sold_per_day=sold_per_day, total_sold=total_sold, **levels)
-
     prices = [p for _, p in priced]
-    ref = median(prices)
-    if junk_multiple and levels:
-        # A junk listing that ran out can look like a sale: discard "sales" far above the typical price.
-        kept = tuple((p, q) for p, q in levels["sold_levels"] if p <= ref * junk_multiple)
+    ref = median(prices) if prices else None
+    # A junk listing that ran out can look like a sale: discard "sales" far above the typical price.
+    limits = [x for x in (ref * junk_multiple if ref and junk_multiple else None, price_cap) if x]
+    if limits and levels:
+        kept = tuple((p, q) for p, q in levels["sold_levels"] if p <= min(limits))
         dropped = sum(q for _, q in levels["sold_levels"]) - sum(q for _, q in kept)
         if dropped > 0:
             levels["sold_levels"] = kept
             total_sold = max(0.0, total_sold - dropped)
             if sold_per_day is not None:
                 sold_per_day = total_sold / (span_hours / 24)
+    if not priced:
+        return History(sold_per_day=sold_per_day, total_sold=total_sold, **levels)
+
     mean = sum(prices) / len(prices)
     cv = None
     if len(prices) >= 3 and mean > 0:

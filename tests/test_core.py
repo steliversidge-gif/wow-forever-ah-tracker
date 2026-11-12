@@ -518,3 +518,22 @@ def test_cooldown_recipe_is_judged_as_a_single_craft():
     assert free.buy_qty == 20
     assert capped.buy_qty == 1 and capped.buy_cost == 102500
     assert "one craft" in capped.reasons[1]
+
+
+def test_a_variant_far_above_its_siblings_is_junk():
+    # Feral Cloak [variant 12718]: its only listing sat at 10g for 13 hours, then one appeared at 15s.
+    points = [(0.0, 300, 0), (2.0, 600, 0)] + [(float(t), 100300, 0) for t in range(3, 16)] \
+        + [(16.0, 1500, 0), (17.0, 1500, 0)]
+    assert build_history(points, span_hours=17).ref_price == 100300
+    h = build_history(points, span_hours=17, price_cap=12500)
+    assert h.ref_price == 1050 and h.n_snaps == 4
+    silly = build_history([(float(t), 100300, 0) for t in range(8)], span_hours=8, price_cap=12500)
+    assert silly.ref_price is None
+
+
+def test_family_cap_trims_the_ladder_but_never_empties_it():
+    from forever_ah.analyse import without_junk
+    ladders = {1: (0, [(1500, 1), (100300, 1)], [1, 1]), 2: (0, [(90000, 1)], [1])}
+    out = without_junk(ladders, {}, TUN, {1: 12500, 2: 12500})
+    assert out[1][1] == [(1500, 1)] and out[1][2] == [1]
+    assert out[2][1] == [(90000, 1)]

@@ -51,8 +51,10 @@ you may have to cancel and reprice.
 **Junk listings are ignored.** A piece of cloth posted at 1,000g is not stock, a price or
 a sale. Anything listed above 5 times the item's going price (the higher of its current
 market price and its typical price; `junk_multiple` in `config.toml`) is left out of the
-stock count, the relist prices and the sales estimates. The item page's order book still
-shows every listing.
+stock count, the relist prices and the sales estimates. Random-suffix gear is also judged
+against its siblings: a "Feral Cloak of X" above 10 times the median Feral Cloak variant
+(`family_multiple`) is junk, even when it is that variant's only listing. The item page's
+order book still shows every listing.
 
 **The scorecard keeps it honest.** Every recommendation is logged when first made and
 later checked against what the market did ([scorecard.py](src/forever_ah/scorecard.py)).
@@ -165,8 +167,9 @@ After changing `config.toml` locally, use `forever-ah run --reanalyse`.
   dips need 24; everything is rated riskier until about three days of data exist.
 - **Data is up to ~90 minutes old.** Blizzard publishes hourly and GitHub's scheduler can
   run late. A cheap listing may be gone by the time you log in.
-- **A lone junk listing cannot be spotted.** If an item's only listing has been a silly
-  price since tracking began, there is nothing to compare it with.
+- **A lone junk listing cannot always be spotted.** If the only listing of an item with no
+  sibling variants has been a silly price since tracking began, there is nothing to
+  compare it with.
 - **Item variants are shown by number.** Random-suffix gear is tracked separately (for
   example `[variant 12726]`) but the suffix name is not resolved.
 - **A new economy deflates.** In launch weeks most prices fall as supply ramps up, which
