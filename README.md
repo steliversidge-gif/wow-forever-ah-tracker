@@ -31,7 +31,8 @@ Pages. No server, no home PC left on, nothing to pay for.
   price, or the vendor price for everyday vendor-only supplies. The "Buy" and "Pay up to"
   columns show how many to make and the material cost of each.
 - **DISENCHANT** – gear listed for less than the enchanting materials it breaks into (with
-  a 20% margin). Needs an enchanter. It uses the original game's disenchant table, which
+  a 20% margin). Needs an enchanter. Items made by enchanters (wands, for example) are
+  left out: Forever does not let you disenchant them. It uses the original game's disenchant table, which
   is not confirmed for Forever: test a few pieces before buying many.
 - **EXPORT** – buy in your faction's house and list on the neutral Blackwater house, where
   the other faction can buy it. Needs all three houses confirmed in `config.toml`. A trade

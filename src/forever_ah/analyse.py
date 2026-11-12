@@ -22,6 +22,7 @@ from forever_ah.signals import (
 
 log = logging.getLogger(__name__)
 TIME_FMT = "%Y-%m-%d %H:%M:%S"
+ENCHANTING = 333           # Wowhead skill-line id
 MAX_VENDOR_SUPPLY = 5000   # copper: the dearest vendor-only material trusted as always available
 
 
@@ -227,7 +228,9 @@ def analyse_house(conn: sqlite3.Connection, house_id: int, settings: Settings) -
         sig = craft(variant_id, levels, hist, bool(is_commodity))
         if sig:
             keep(variant_id, sig)
-        _, quality, item_class, level = item_of.get(variant_id, (None, None, None, None))
+        item_id, quality, item_class, level = item_of.get(variant_id, (None, None, None, None))
+        if (facts.get(item_id) or (None,) * 4)[3] == ENCHANTING:
+            continue   # Forever: what an enchanter can make cannot be disenchanted (e.g. Greater Magic Wand)
         breaks_into = disenchant_yield(quality, item_class, level)
         if breaks_into:
             sig = disenchant_signal(
