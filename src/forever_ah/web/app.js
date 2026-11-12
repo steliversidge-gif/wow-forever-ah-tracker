@@ -22,6 +22,9 @@ function money(c) {
 const shortMoney = c => c >= 10000 ? (c / 10000).toFixed(c >= 100000 ? 0 : 1) + 'g' : c >= 100 ? Math.round(c / 100) + 's' : Math.round(c) + 'c';
 const pct = (x, signed) => x == null ? '–' : (signed && x > 0 ? '+' : '') + (x * 100).toFixed(Math.abs(x) < 0.1 ? 1 : 0) + '%';
 const num = (x, d = 0) => x == null ? '–' : Number(x).toLocaleString(undefined, { maximumFractionDigits: d });
+// Snapshots land at about :25 past; item pages show them by the hour they belong to.
+const toHour = e => Math.floor(e / 3600) * 3600;
+const hourClock = e => new Date(toHour(e) * 1000).toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' });
 const clock = e => new Date(e * 1000).toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' });
 function ago(e) {
   const m = Math.max(0, Math.round((Date.now() / 1000 - e) / 60));
@@ -250,6 +253,11 @@ async function viewItem(variantId) {
   }
   const chunk = await getJSON(`data/hist-${S.houseId}-${variantId % S.meta.history_chunks}.json`);
   const hist = chunk[variantId] || { t: [], p: [], m: [], s: [], q: [], ladder: [] };
+  hist.t = hist.t.map(toHour);
+  let droppedBy = [];
+  if ((x.how || '').includes('Drops')) {
+    try { droppedBy = (await getJSON('data/drops.json'))[x.item_id] || []; } catch { droppedBy = []; }
+  }
   const sigs = d.signals.filter(s => s.variant_id === variantId);
   const vs = x.ref_price ? x.min_price / x.ref_price - 1 : null;
   view.innerHTML = `
@@ -275,15 +283,22 @@ async function viewItem(variantId) {
       <div class="tile"><div class="k">In stock</div><div class="v">${num(x.quantity)}</div></div>
       <div class="tile"><div class="k">Vendor pays</div><div class="v">${money(x.vendor_sell)}</div></div>
     </div>
+    ${droppedBy.length ? `<h2>Dropped by</h2>
+    <div class="table-wrap" style="max-width:640px"><table><thead><tr><th>Enemy</th><th class="num">Level</th><th>Zone</th>
+      <th class="num">Drop chance</th></tr></thead><tbody>${droppedBy.map(([id, name, lvl, zone, chance]) => `<tr>
+      <td><a href="https://www.wowhead.com/forever/npc=${id}" target="_blank" rel="noopener">${esc(name)}</a></td>
+      <td class="num">${esc(lvl || '–')}</td><td>${esc(zone || '–')}</td>
+      <td class="num">${num(chance, chance < 10 ? 2 : 0)}%</td></tr>`).join('')}</tbody></table></div>
+    <p class="muted">The three likeliest commonly found enemies, from the original game's drop tables. Forever may differ.</p>` : ''}
     <h2>Price history</h2>
     <div class="legend"><span style="--c:var(--series-1)">Market price (cheapest 15% of stock)</span>
       <span style="--c:var(--series-2)">Cheapest listing</span></div>
     <div class="chart" id="c-price"></div>
-    <h2>Units sold per snapshot (estimated)</h2>
+    <h2>Units sold per hour (estimated)</h2>
     <div class="chart" id="c-sold"></div>
-    <details><summary>History as a table</summary><div class="table-wrap"><table><thead><tr><th>Snapshot</th>
+    <details><summary>History as a table</summary><div class="table-wrap"><table><thead><tr><th>Hour</th>
       <th class="num">Market price</th><th class="num">Cheapest</th><th class="num">Sold</th><th class="num">In stock</th></tr></thead>
-      <tbody>${hist.t.map((t, i) => `<tr><td>${clock(t)}</td><td class="num">${money(hist.p[i])}</td>
+      <tbody>${hist.t.map((t, i) => `<tr><td>${hourClock(t)}</td><td class="num">${money(hist.p[i])}</td>
       <td class="num">${money(hist.m[i])}</td><td class="num">${num(hist.s[i])}</td><td class="num">${num(hist.q[i])}</td></tr>`).reverse().join('')}</tbody></table></div></details>
     <h2>Order book (cheapest first)</h2>
     <div class="table-wrap" style="max-width:420px"><table><thead><tr><th class="num">Price each</th><th class="num">Units</th>
@@ -320,11 +335,17 @@ function frame(t, lo, hi, fmt) {
     svg += `<line x1="${l}" x2="${W - r}" y1="${y(v)}" y2="${y(v)}" stroke="var(--grid)"/>
             <text x="${l - 6}" y="${y(v) + 4}" text-anchor="end">${fmt(v)}</text>`;
   }
-  const days = new Set();
-  t.forEach(e => {
-    const day = new Date(e * 1000).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
-    if (!days.has(day)) { days.add(day); if (days.size > 1 || t.length < 30) svg += `<text x="${x(e)}" y="${H - 6}">${day}</text>`; }
-  });
+  // Whole-hour marks along the bottom, at most about eight; midnight shows the date instead.
+  const span = (t[t.length - 1] - t[0]) / 3600;
+  const step = [1, 2, 3, 6, 12, 24, 48, 96].find(s => span / s <= 8) || 168;
+  for (let e = toHour(t[0]); e <= t[t.length - 1]; e += 3600) {
+    const d = new Date(e * 1000);
+    if (e < t[0] || d.getHours() % Math.min(step, 24) || (step > 24 && Math.round(e / 86400) % (step / 24))) continue;
+    const label = d.getHours() === 0 ? d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
+      : d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+    svg += `<line x1="${x(e)}" x2="${x(e)}" y1="${H - b}" y2="${H - b + 4}" stroke="var(--grid)"/>
+            <text x="${x(e)}" y="${H - 6}" text-anchor="${x(e) > W - r - 20 ? 'end' : 'middle'}">${label}</text>`;
+  }
   return { W, H, l, r, top, b, x, y, svg };
 }
 function hover(el, f, t, onIndex) {
@@ -366,7 +387,7 @@ function lineChart(el, t, series) {
       if (v == null) { dot.setAttribute('visibility', 'hidden'); return; }
       dot.setAttribute('cx', f.x(t[i])); dot.setAttribute('cy', f.y(v)); dot.setAttribute('visibility', 'visible');
     });
-    return `<b>${clock(t[i])}</b><br>` + series.map(s => `<span class="sw" style="background:${s.color}"></span>${s.name}: <b>${money(s.values[i])}</b>`).join('<br>');
+    return `<b>${hourClock(t[i])}</b><br>` + series.map(s => `<span class="sw" style="background:${s.color}"></span>${s.name}: <b>${money(s.values[i])}</b>`).join('<br>');
   });
 }
 function barChart(el, t, values, label) {
@@ -381,7 +402,7 @@ function barChart(el, t, values, label) {
   el.innerHTML = `<svg viewBox="0 0 ${f.W} ${f.H}" role="img" aria-label="Units sold bar chart">${svg}</svg>`;
   hover(el, f, t, i => {
     el.querySelectorAll('rect').forEach(r => r.setAttribute('opacity', i < 0 || Number(r.dataset.i) === i ? 1 : 0.45));
-    return i < 0 ? '' : `<b>${clock(t[i])}</b><br>${label}: <b>${num(values[i])}</b>`;
+    return i < 0 ? '' : `<b>${hourClock(t[i])}</b><br>${label}: <b>${num(values[i])}</b>`;
   });
 }
 

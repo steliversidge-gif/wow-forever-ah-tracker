@@ -22,7 +22,7 @@ forever-ah = "forever_ah.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-forever_ah = ["web/*"]
+forever_ah = ["web/*", "data/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
