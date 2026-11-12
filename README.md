@@ -168,7 +168,7 @@ After changing `config.toml` locally, use `forever-ah run --reanalyse`.
 - **A lone junk listing cannot be spotted.** If an item's only listing has been a silly
   price since tracking began, there is nothing to compare it with.
 - **Drop chances are the original game's.** The "Dropped by" list comes from the pfQuest
-  addon's database ([details](src/forever_ah/data/README.md)), not from Forever. Chances
+  addon's database ([details](src/forever_ah/reference/README.md)), not from Forever. Chances
   for very common drops such as cloth look overstated; use the list for where to go, not
   as exact odds.
 - **Item variants are shown by number.** Random-suffix gear is tracked separately (for
