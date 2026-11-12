@@ -192,13 +192,6 @@ def export_site(conn: sqlite3.Connection, settings: Settings) -> Path:
         (dist / name).write_bytes(content)
     (dist / ".nojekyll").write_text("", encoding="utf-8")
 
-    # Which enemies drop each auctioned item (see reference/README.md), for the item page.
-    drops = json.loads((resources.files("forever_ah") / "reference" / "drops.json").read_text(encoding="utf-8"))
-    listed = {str(r[0]) for r in conn.execute("SELECT DISTINCT item_id FROM variants")}
-    (data_dir / "drops.json").write_text(
-        json.dumps({k: v for k, v in drops.items() if k in listed}, separators=(",", ":"), ensure_ascii=False),
-        encoding="utf-8")
-
     houses = []
     undecided: dict[str, list[int]] = {}
     for house in tracked_houses(conn, settings):

@@ -254,10 +254,6 @@ async function viewItem(variantId) {
   const chunk = await getJSON(`data/hist-${S.houseId}-${variantId % S.meta.history_chunks}.json`);
   const hist = chunk[variantId] || { t: [], p: [], m: [], s: [], q: [], ladder: [] };
   hist.t = hist.t.map(toHour);
-  let droppedBy = [];
-  if ((x.how || '').includes('Drops')) {
-    try { droppedBy = (await getJSON('data/drops.json'))[x.item_id] || []; } catch { droppedBy = []; }
-  }
   const sigs = d.signals.filter(s => s.variant_id === variantId);
   const vs = x.ref_price ? x.min_price / x.ref_price - 1 : null;
   view.innerHTML = `
@@ -283,13 +279,6 @@ async function viewItem(variantId) {
       <div class="tile"><div class="k">In stock</div><div class="v">${num(x.quantity)}</div></div>
       <div class="tile"><div class="k">Vendor pays</div><div class="v">${money(x.vendor_sell)}</div></div>
     </div>
-    ${droppedBy.length ? `<h2>Dropped by</h2>
-    <div class="table-wrap" style="max-width:640px"><table><thead><tr><th>Enemy</th><th class="num">Level</th><th>Zone</th>
-      <th class="num">Drop chance</th></tr></thead><tbody>${droppedBy.map(([id, name, lvl, zone, chance]) => `<tr>
-      <td><a href="https://www.wowhead.com/forever/npc=${id}" target="_blank" rel="noopener">${esc(name)}</a></td>
-      <td class="num">${esc(lvl || '–')}</td><td>${esc(zone || '–')}</td>
-      <td class="num">${num(chance, chance < 10 ? 2 : 0)}%</td></tr>`).join('')}</tbody></table></div>
-    <p class="muted">The three likeliest commonly found enemies, from the original game's drop tables. Forever may differ.</p>` : ''}
     <h2>Price history</h2>
     <div class="legend"><span style="--c:var(--series-1)">Market price (cheapest 15% of stock)</span>
       <span style="--c:var(--series-2)">Cheapest listing</span></div>

@@ -14,7 +14,7 @@ Pages. No server, no home PC left on, nothing to pay for.
 | **Buy list** | One row per trade: how many to buy, the most to pay, what to sell each for, profit after the house cut, how long it should take to sell, and a risk rating with the reasons behind it. Filter by budget, minimum profit, risk and play. |
 | **Market** | Every listed item with its cheapest price, typical price, trend and estimated sales per day. Use it to price things you want to sell. |
 | **Farm** | Items you can go and get (herbs, ore, skins, fish, drops), ranked by how much gold the market pays out for them a day, with days of stock on sale. No buying involved. |
-| **Item page** | Price history and estimated sales by the hour, the order book with the running cost of buying it out, and for dropped items the three enemies most likely to drop it. |
+| **Item page** | Price history and estimated sales by the hour, the order book with the running cost of buying it out. |
 | **Cross-faction** | Every EXPORT trade in both directions: buy in one faction's house, list on Blackwater for the other faction. |
 | **Status** | Collector health, the scorecard (did past recommendations work?), when things sell by hour of day, the measured base rates, and the one-off "which house is mine?" setup. |
 
@@ -167,10 +167,6 @@ After changing `config.toml` locally, use `forever-ah run --reanalyse`.
   run late. A cheap listing may be gone by the time you log in.
 - **A lone junk listing cannot be spotted.** If an item's only listing has been a silly
   price since tracking began, there is nothing to compare it with.
-- **Drop chances are the original game's.** The "Dropped by" list comes from the pfQuest
-  addon's database ([details](src/forever_ah/reference/README.md)), not from Forever. Chances
-  for very common drops such as cloth look overstated; use the list for where to go, not
-  as exact odds.
 - **Item variants are shown by number.** Random-suffix gear is tracked separately (for
   example `[variant 12726]`) but the suffix name is not resolved.
 - **A new economy deflates.** In launch weeks most prices fall as supply ramps up, which
