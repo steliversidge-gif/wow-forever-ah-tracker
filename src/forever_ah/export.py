@@ -103,6 +103,16 @@ def export_house(conn: sqlite3.Connection, house_id: int, data_dir: Path, settin
             "t": [p[0] for p in points], "p": [p[1] for p in points], "m": [p[2] for p in points],
             "s": [p[3] for p in points], "q": [p[4] for p in points],
         }
+    # The long view: one point per day for up to daily_retention_days.
+    daily = conn.execute(
+        "SELECT variant_id, day, market_price, sold_qty, quantity FROM item_daily WHERE house_id = ? "
+        "ORDER BY variant_id, day", (house_id,))
+    for variant_id, group in groupby(daily, key=lambda r: r[0]):
+        entry = chunks[variant_id % HISTORY_CHUNKS].get(variant_id)
+        group = list(group)
+        if entry is not None and len(group) >= 2:
+            entry["d"] = {"t": [_epoch(r[1] + " 00:00:00") for r in group], "p": [r[2] for r in group],
+                          "s": [round(r[3], 1) for r in group], "q": [r[4] for r in group]}
     depth = settings.tuning.ladder_levels
     ladder_rows = conn.execute(
         "SELECT variant_id, unit_price, SUM(quantity) FROM listings WHERE house_id = ? "
@@ -114,6 +124,15 @@ def export_house(conn: sqlite3.Connection, house_id: int, data_dir: Path, settin
     for n, chunk in enumerate(chunks):
         _write(data_dir / f"hist-{house_id}-{n}.json", chunk)
     return {"n_items": len(market), "n_signals": len(signals)}
+
+
+def sales_by_day(conn: sqlite3.Connection, house_id: int) -> list[dict]:
+    """Everything sold per UTC day, oldest first, for the "gold traded per day" table."""
+    return [
+        {"day": _epoch(r[0] + " 00:00:00"), "snapshots": r[3], "value": round(r[2]), "units": round(r[1])}
+        for r in conn.execute(
+            "SELECT day, sold_qty, sold_value, n_snaps FROM house_daily WHERE house_id = ? ORDER BY day", (house_id,))
+    ]
 
 
 def sales_by_hour(conn: sqlite3.Connection, house_id: int) -> list[dict]:
@@ -208,7 +227,8 @@ def export_site(conn: sqlite3.Connection, settings: Settings) -> Path:
         houses.append({"id": house_id, "name": house["name"], "faction": house["faction"],
                        "slot": house["slot"], "pinned": pinned, "n_snaps": snap[0],
                        "published_at": _epoch(snap[1]), "first_snapshot": _epoch(snap[2]),
-                       "sales_by_hour": sales_by_hour(conn, house_id), "rates": base_rates(conn, house_id),
+                       "sales_by_hour": sales_by_hour(conn, house_id), "sales_by_day": sales_by_day(conn, house_id),
+                       "rates": base_rates(conn, house_id),
                        **counts})
 
     fees = settings.fees

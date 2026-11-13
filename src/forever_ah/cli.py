@@ -25,6 +25,8 @@ def cmd_run(args) -> int:
     updated, failures = collector.collect(conn, client, settings)
     collector.resolve_items(conn, client)
     collector.resolve_facts(conn, client)
+    if updated:
+        collector.roll_up_days(conn)   # before prune: summarise days whose hourly rows are about to go
     collector.prune(conn, settings)
 
     houses = [h["house_id"] for h in collector.tracked_houses(conn, settings)] if args.reanalyse else updated

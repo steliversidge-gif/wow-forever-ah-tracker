@@ -25,6 +25,7 @@ const num = (x, d = 0) => x == null ? '–' : Number(x).toLocaleString(undefined
 // Snapshots land at about :25 past; item pages show them by the hour they belong to.
 const toHour = e => Math.floor(e / 3600) * 3600;
 const hourClock = e => new Date(toHour(e) * 1000).toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+const dayLabel = e => new Date(e * 1000).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' });
 const clock = e => new Date(e * 1000).toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' });
 function ago(e) {
   const m = Math.max(0, Math.round((Date.now() / 1000 - e) / 60));
@@ -289,12 +290,19 @@ async function viewItem(variantId) {
       <th class="num">Market price</th><th class="num">Cheapest</th><th class="num">Sold</th><th class="num">In stock</th></tr></thead>
       <tbody>${hist.t.map((t, i) => `<tr><td>${hourClock(t)}</td><td class="num">${money(hist.p[i])}</td>
       <td class="num">${money(hist.m[i])}</td><td class="num">${num(hist.s[i])}</td><td class="num">${num(hist.q[i])}</td></tr>`).reverse().join('')}</tbody></table></div></details>
+    ${hist.d ? `<h2>Day by day (up to 90 days)</h2>
+    <p class="muted">Average market price and units sold for each day the item sold. Days are UTC; today is still filling.</p>
+    <div class="chart" id="c-dprice"></div><div class="chart" id="c-dsold"></div>` : ''}
     <h2>Order book (cheapest first)</h2>
     <div class="table-wrap" style="max-width:420px"><table><thead><tr><th class="num">Price each</th><th class="num">Units</th>
       <th class="num">Cost to clear to here</th></tr></thead><tbody>${(() => {
         let run = 0;
         return (hist.ladder || []).map(([p, q]) => { run += p * q; return `<tr><td class="num">${money(p)}</td><td class="num">${num(q)}</td><td class="num">${money(run)}</td></tr>`; }).join('');
       })()}</tbody></table></div>`;
+  if (hist.d) {
+    lineChart($('#c-dprice'), hist.d.t, [{ name: 'Average market price', color: 'var(--series-1)', values: hist.d.p }], dayLabel);
+    barChart($('#c-dsold'), hist.d.t, hist.d.s, 'Sold that day', dayLabel);
+  }
   if (hist.t.length < 2) {
     $('#c-price').innerHTML = $('#c-sold').innerHTML = '<p class="muted">Not enough snapshots to chart yet.</p>';
     return;
@@ -315,7 +323,7 @@ function niceTicks(lo, hi, n = 4) {
   for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-9; v += step) ticks.push(v);
   return ticks;
 }
-function frame(t, lo, hi, fmt) {
+function frame(t, lo, hi, fmt, when) {
   const W = 800, H = 240, l = 48, r = 12, top = 10, b = 24;
   const x = v => l + (v - t[0]) / Math.max(t[t.length - 1] - t[0], 1) * (W - l - r);
   const y = v => top + (1 - (v - lo) / Math.max(hi - lo, 1e-9)) * (H - top - b);
@@ -323,6 +331,14 @@ function frame(t, lo, hi, fmt) {
   for (const v of niceTicks(lo, hi)) {
     svg += `<line x1="${l}" x2="${W - r}" y1="${y(v)}" y2="${y(v)}" stroke="var(--grid)"/>
             <text x="${l - 6}" y="${y(v) + 4}" text-anchor="end">${fmt(v)}</text>`;
+  }
+  if (when) {   // one point per day: label about eight of the days themselves
+    const every = Math.ceil(t.length / 8);
+    t.forEach((e, i) => {
+      if (i % every) return;
+      svg += `<text x="${x(e)}" y="${H - 6}" text-anchor="${x(e) > W - r - 30 ? 'end' : 'middle'}">${when(e).replace(/^\S+ /, '')}</text>`;
+    });
+    return { W, H, l, r, top, b, x, y, svg };
   }
   // Whole-hour marks along the bottom, at most about eight; midnight shows the date instead.
   const span = (t[t.length - 1] - t[0]) / 3600;
@@ -351,10 +367,10 @@ function hover(el, f, t, onIndex) {
   });
   svg.addEventListener('mouseleave', () => { tip.hidden = true; onIndex(-1); });
 }
-function lineChart(el, t, series) {
+function lineChart(el, t, series, when) {
   const all = series.flatMap(s => s.values).filter(v => v != null);
   const lo0 = Math.min(...all), hi0 = Math.max(...all), pad = (hi0 - lo0) * 0.08 || hi0 * 0.05 || 1;
-  const f = frame(t, Math.max(0, lo0 - pad), hi0 + pad, shortMoney);
+  const f = frame(t, Math.max(0, lo0 - pad), hi0 + pad, shortMoney, when);
   let svg = f.svg;
   for (const s of series) {
     let dpath = '', pen = false;
@@ -376,11 +392,11 @@ function lineChart(el, t, series) {
       if (v == null) { dot.setAttribute('visibility', 'hidden'); return; }
       dot.setAttribute('cx', f.x(t[i])); dot.setAttribute('cy', f.y(v)); dot.setAttribute('visibility', 'visible');
     });
-    return `<b>${hourClock(t[i])}</b><br>` + series.map(s => `<span class="sw" style="background:${s.color}"></span>${s.name}: <b>${money(s.values[i])}</b>`).join('<br>');
+    return `<b>${(when || hourClock)(t[i])}</b><br>` + series.map(s => `<span class="sw" style="background:${s.color}"></span>${s.name}: <b>${money(s.values[i])}</b>`).join('<br>');
   });
 }
-function barChart(el, t, values, label) {
-  const f = frame(t, 0, Math.max(...values, 1), v => num(v));
+function barChart(el, t, values, label, when) {
+  const f = frame(t, 0, Math.max(...values, 1), v => num(v), when);
   const slot = (f.W - f.l - f.r) / t.length, w = Math.max(1, Math.min(24, slot - 2));
   let svg = f.svg;
   values.forEach((v, i) => {
@@ -391,7 +407,7 @@ function barChart(el, t, values, label) {
   el.innerHTML = `<svg viewBox="0 0 ${f.W} ${f.H}" role="img" aria-label="Units sold bar chart">${svg}</svg>`;
   hover(el, f, t, i => {
     el.querySelectorAll('rect').forEach(r => r.setAttribute('opacity', i < 0 || Number(r.dataset.i) === i ? 1 : 0.45));
-    return i < 0 ? '' : `<b>${hourClock(t[i])}</b><br>${label}: <b>${num(values[i])}</b>`;
+    return i < 0 ? '' : `<b>${(when || hourClock)(t[i])}</b><br>${label}: <b>${num(values[i])}</b>`;
   });
 }
 
@@ -461,8 +477,26 @@ function viewStatus() {
       hours: at one price the newest listing sells first. It takes about a week of data to settle.</p>
     <div class="chart" id="c-hours"></div>
     <details><summary>Sales by hour as a table</summary><div id="t-hours"></div></details>
+    ${dayTable(houseMeta(S.houseId).sales_by_day || [])}
     ${ratesHtml(m.houses)}`;
   hourChart($('#c-hours'), $('#t-hours'), houseMeta(S.houseId).sales_by_hour || []);
+}
+
+// Gold traded per day, with the change on the same weekday a week earlier once there is one.
+function dayTable(days) {
+  if (!days.length) return '';
+  const byDay = new Map(days.map(d => [d.day, d]));
+  return `<h2>Gold traded per day</h2>
+    <p class="muted">Estimated value of everything sold, per UTC day, kept for 90 days. A day with fewer than 24 snapshots
+      is incomplete. "Week on week" compares complete days with the same weekday a week before.</p>
+    <div class="table-wrap" style="max-width:640px"><table><thead><tr><th>Day</th><th class="num">Snapshots</th>
+      <th class="num">Gold traded</th><th class="num">Units</th><th class="num">Week on week</th></tr></thead><tbody>
+    ${[...days].reverse().map(d => {
+      const prev = byDay.get(d.day - 7 * 86400);
+      const wow = prev && prev.snapshots >= 23 && d.snapshots >= 23 && prev.value ? d.value / prev.value - 1 : null;
+      return `<tr><td>${dayLabel(d.day)}</td><td class="num">${d.snapshots}</td><td class="num">${money(d.value)}</td>
+        <td class="num">${num(d.units)}</td><td class="num">${pct(wow, true)}</td></tr>`;
+    }).join('')}</tbody></table></div>`;
 }
 
 function scorecardHtml(sc) {

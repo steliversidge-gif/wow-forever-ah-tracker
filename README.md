@@ -99,7 +99,10 @@ compares each snapshot with the last ([lifecycle.py](src/forever_ah/lifecycle.py
 
 **Storage.** A listing is stored once while it is live and deleted when it closes; what
 happened to it is tallied into one summary row per item per snapshot. Seven days of
-history for three houses is a few hundred MB, not tens of GB.
+history for three houses is a few hundred MB, not tens of GB. Before the hourly rows are
+pruned they are rolled up into one row per item per day it sold, kept for 90 days: that is
+the "Day by day" chart on the item page and the "Gold traded per day" table (with week on
+week change) on the Status page.
 
 ## Setup
 

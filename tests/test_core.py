@@ -551,3 +551,29 @@ def test_gear_flips_and_exports_are_rated_riskier():
     export, _, _ = assess_risk("EXPORT", 0.1, hist)
     assert gear == stack + 25 and any("Gear" in r for r in why)
     assert export == stack + 35
+
+
+def test_daily_roll_up_keeps_items_that_sold_and_survives_pruning(tmp_path):
+    from forever_ah import collector, db
+
+    conn = db.connect(tmp_path / "d.db")
+    conn.execute("INSERT INTO houses VALUES (114, 'Horde', 'horde', 2, NULL)")
+    for snap, when in ((1, "2026-11-11 22:25:00"), (2, "2026-11-11 23:25:00"), (3, "2026-11-12 00:25:00")):
+        conn.execute("INSERT INTO snapshots (snapshot_id, house_id, published_at, fetched_at, n_auctions, n_commodities) "
+                     "VALUES (?, 114, ?, ?, 0, 0)", (snap, when, when))
+        for variant, price, sold in ((1, 100 * snap, 2), (2, 500, 0)):
+            conn.execute("INSERT INTO item_stats (house_id, variant_id, snapshot_id, min_price, market_price, quantity, "
+                         "sold_qty, sold_value) VALUES (114, ?, ?, ?, ?, 10, ?, ?)",
+                         (variant, snap, price - 1, price, sold, sold * price))
+    assert collector.roll_up_days(conn) == 2
+    rows = [tuple(r) for r in conn.execute("SELECT variant_id, day, market_price, min_price, sold_qty, n_snaps FROM item_daily ORDER BY day")]
+    assert rows == [(1, "2026-11-11", 150, 99, 4.0, 2), (1, "2026-11-12", 300, 299, 2.0, 1)]   # the unsold item is left out
+    assert [tuple(r) for r in conn.execute("SELECT day, sold_qty, sold_value, n_snaps FROM house_daily ORDER BY day")] == [
+        ("2026-11-11", 4.0, 600.0, 2), ("2026-11-12", 2.0, 600.0, 1)]
+    # the hourly rows of the first day go; its summary stays and is not rebuilt from nothing
+    conn.execute("DELETE FROM item_stats WHERE snapshot_id <= 2")
+    conn.execute("DELETE FROM snapshots WHERE snapshot_id <= 2")
+    conn.execute("INSERT INTO snapshots (snapshot_id, house_id, published_at, fetched_at, n_auctions, n_commodities) "
+                 "VALUES (4, 114, '2026-11-13 00:25:00', 'x', 0, 0)")
+    collector.roll_up_days(conn)
+    assert conn.execute("SELECT sold_qty FROM item_daily WHERE day = '2026-11-11'").fetchone()[0] == 4.0

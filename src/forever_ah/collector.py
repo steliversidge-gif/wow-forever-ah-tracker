@@ -305,9 +305,41 @@ def resolve_facts(conn: sqlite3.Connection, client: BlizzardClient, limit: int =
     return done
 
 
+def roll_up_days(conn: sqlite3.Connection) -> int:
+    """Summarise the hourly rows into one row per item per UTC day (and one per house).
+
+    Run before prune. The two newest days are rebuilt every time (today is
+    still filling; yesterday may have gained a late snapshot); older days are
+    only filled in if missing, so a day keeps its full summary after its
+    hourly rows start to be pruned. Items are kept for the days they sold at
+    least one unit: unsold one-off gear would be most of the rows.
+    """
+    days = [r[0] for r in conn.execute("SELECT DISTINCT date(published_at) FROM snapshots ORDER BY 1")]
+    have = {r[0] for r in conn.execute("SELECT DISTINCT day FROM house_daily")}
+    todo = [d for d in days if d not in have or d in days[-2:]]
+    for day in todo:
+        snaps = [r[0] for r in conn.execute("SELECT snapshot_id FROM snapshots WHERE date(published_at) = ?", (day,))]
+        marks = ",".join("?" * len(snaps))
+        conn.execute("DELETE FROM item_daily WHERE day = ?", (day,))
+        conn.execute("DELETE FROM house_daily WHERE day = ?", (day,))
+        conn.execute(
+            "INSERT INTO item_daily SELECT house_id, variant_id, ?, ROUND(AVG(market_price)), MIN(min_price), "
+            f"SUM(sold_qty), SUM(sold_value), ROUND(AVG(quantity)), COUNT(*) FROM item_stats "
+            f"WHERE snapshot_id IN ({marks}) GROUP BY house_id, variant_id HAVING SUM(sold_qty) >= 1",
+            (day, *snaps))
+        conn.execute(
+            "INSERT INTO house_daily SELECT house_id, ?, SUM(sold_qty), SUM(sold_value), COUNT(DISTINCT snapshot_id) "
+            f"FROM item_stats WHERE snapshot_id IN ({marks}) GROUP BY house_id", (day, *snaps))
+    conn.commit()
+    return len(todo)
+
+
 def prune(conn: sqlite3.Connection, settings: Settings) -> None:
     """Drop history past retention, and all data for houses we no longer track."""
     dropped_house = False
+    day_cutoff = (datetime.now(UTC) - timedelta(days=settings.tuning.daily_retention_days)).strftime("%Y-%m-%d")
+    conn.execute("DELETE FROM item_daily WHERE day < ?", (day_cutoff,))
+    conn.execute("DELETE FROM house_daily WHERE day < ?", (day_cutoff,))
     cutoff = (datetime.now(UTC) - timedelta(days=settings.tuning.stats_retention_days)).strftime(TIME_FMT)
     old = [r[0] for r in conn.execute("SELECT snapshot_id FROM snapshots WHERE published_at < ?", (cutoff,))]
     if old:
@@ -318,7 +350,8 @@ def prune(conn: sqlite3.Connection, settings: Settings) -> None:
     for (house_id,) in conn.execute("SELECT DISTINCT house_id FROM snapshots").fetchall():
         if house_id not in tracked:
             log.info("House %s is no longer tracked: removing its data", house_id)
-            for table in ("listings", "item_stats", "market", "signals", "snapshots", "rate_counts", "signal_log"):
+            for table in ("listings", "item_stats", "market", "signals", "snapshots", "rate_counts", "signal_log",
+                          "item_daily", "house_daily"):
                 conn.execute(f"DELETE FROM {table} WHERE house_id = ?", (house_id,))
             conn.execute("UPDATE houses SET last_modified = NULL WHERE house_id = ?", (house_id,))
             dropped_house = True

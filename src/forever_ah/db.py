@@ -13,6 +13,9 @@ tallied into one small summary row per item per hourly snapshot.
               what the market then did (the scorecard)
   rate_counts hourly tallies the sale / expiry / repost base rates are re-measured from
   item_facts  per item, from Wowhead: how it is obtained and, if crafted, its recipe
+  item_daily  one row per item per day it sold, kept for months after the hourly
+              rows are pruned: the long view (week on week, day of the week)
+  house_daily one row per house per day: everything that sold
 """
 
 from __future__ import annotations
@@ -20,7 +23,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS houses (
@@ -174,6 +177,28 @@ CREATE TABLE IF NOT EXISTS item_facts (
     fetched_at TEXT NOT NULL,
     ok         INTEGER NOT NULL           -- 0 when Wowhead had nothing; retried after a day
 );
+
+CREATE TABLE IF NOT EXISTS item_daily (
+    house_id     INTEGER NOT NULL,
+    variant_id   INTEGER NOT NULL,
+    day          TEXT NOT NULL,           -- UTC date, YYYY-MM-DD
+    market_price INTEGER,                 -- mean of the day's hourly market prices
+    min_price    INTEGER,                 -- cheapest listing seen that day
+    sold_qty     REAL NOT NULL,
+    sold_value   REAL NOT NULL,
+    quantity     INTEGER NOT NULL,        -- mean units in stock
+    n_snaps      INTEGER NOT NULL,        -- hourly snapshots the item appeared in
+    PRIMARY KEY (house_id, variant_id, day)
+) WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS house_daily (
+    house_id   INTEGER NOT NULL,
+    day        TEXT NOT NULL,
+    sold_qty   REAL NOT NULL,
+    sold_value REAL NOT NULL,
+    n_snaps    INTEGER NOT NULL,          -- hourly snapshots collected that day (24 = complete)
+    PRIMARY KEY (house_id, day)
+) WITHOUT ROWID;
 """
 
 # Statements that bring an older database up to each version.
@@ -184,6 +209,7 @@ MIGRATIONS = {
         "ALTER TABLE signals ADD COLUMN list_hours INTEGER",
     ),
     3: (),   # only a new table, which the schema script creates
+    4: (),   # likewise: item_daily and house_daily
 }
 
 
