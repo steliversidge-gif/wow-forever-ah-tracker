@@ -36,6 +36,12 @@ AT_PRICE = 0.97        # "at this price" means within 3% under it
 MIN_LEVEL_DAYS = 0.25  # price-level data is ignored until 6 hours of it exist
 SHORT_LISTING = 8      # hours; the fallback when a trade may need repricing
 
+# The scorecard's first day (12 Nov 2026, ~500 judged trades since the sales
+# fixes): a quarter of the flips and crafts that sold took 1.5x the predicted
+# time or longer, and exports 3x; dips sold on time. Predictions are stretched
+# to match, so "sells in" is a time most trades beat, not a coin toss.
+TIME_STRETCH = {"FLIP": 1.5, "CRAFT": 1.5, "EXPORT": 2.0}
+
 
 @dataclass(frozen=True)
 class History:
@@ -232,7 +238,7 @@ def expected_expiries(days_to_sell: float, listing_hours: float) -> float:
 
 
 def assess_risk(strategy: str, days_to_sell: float, hist: History, share: float | None = None,
-                pressure: float = 0.0) -> tuple[int, str, list[str]]:
+                pressure: float = 0.0, is_commodity: bool = True) -> tuple[int, str, list[str]]:
     """0-100 score from how fast it sells, how much evidence we have, how jumpy
     the price is, which way it is heading, how often buyers pay this much, and
     how much competing stock is posted at the same price."""
@@ -291,9 +297,15 @@ def assess_risk(strategy: str, days_to_sell: float, hist: History, share: float 
         score += 15
         reasons.append("Relies on the price recovering")
 
+    # Scorecard, first day: gear flips filled 20% of the time against 49% for
+    # stackables, and half of all exports never filled.
+    if strategy == "FLIP" and not is_commodity:
+        score += 25
+        reasons.append("Gear: buyers choose by stats, so it sells less predictably than stackables")
+
     if strategy == "EXPORT":
-        score += 10
-        reasons.append("Blackwater is a thin market")
+        score += 35
+        reasons.append("Blackwater is a thin market: half of past exports did not sell in time")
 
     score = min(score, 100)
     return score, _risk_level(score), reasons
@@ -308,12 +320,13 @@ def _finish(strategy: str, qty: int, max_price: int, cost: int, target: int, day
             tun: Tuning, share: float | None = None, pressure: float = 0.0) -> Signal | None:
     # A deposit is refunded on sale and lost on expiry; charge the expected
     # number of expiries before the stock clears.
+    days *= TIME_STRETCH.get(strategy, 1.0)
     hours = choose_listing_hours(vendor, qty, is_commodity, fees, hist, pressure)
     lost_deposits = round(_deposit(vendor, qty, is_commodity, fees, hours) * expected_expiries(days, hours))
     profit = math.floor(qty * target * (1 - fees.cut)) - cost - lost_deposits
     if cost <= 0 or profit < tun.min_profit or profit / cost < tun.min_roi:
         return None
-    score, level, reasons = assess_risk(strategy, days, hist, share, pressure)
+    score, level, reasons = assess_risk(strategy, days, hist, share, pressure, is_commodity)
     if hours < fees.listing_hours:
         reasons.append(f"List for {hours}h, not {fees.listing_hours}h: it may need repricing, "
                        "and cancelling forfeits the deposit")
@@ -370,6 +383,10 @@ def flip_signal(levels: list[Level], hist: History, vendor: int | None, is_commo
 def dip_signal(levels: list[Level], hist: History, vendor: int | None, is_commodity: bool,
                fees: HouseFees, tun: Tuning) -> Signal | None:
     if hist.ref_price is None or hist.n_snaps < 24 or not hist.sold_per_day or not levels:
+        return None
+    # A price that is still sliding is not a dip. Scorecard, first day: dips on
+    # items falling over 10% a day filled 52% of the time, the rest about 80%.
+    if hist.trend_per_day is not None and hist.trend_per_day < -tun.dip_max_fall:
         return None
     ceiling = hist.ref_price * (1 - tun.dip_threshold)
     if levels[0][0] > ceiling:

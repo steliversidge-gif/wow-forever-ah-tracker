@@ -176,13 +176,16 @@ def test_no_flip_when_gap_does_not_cover_the_cut():
 
 
 def test_dip_signal_is_riskier_and_accounts_for_queue():
-    hist = History(n_snaps=48, ref_price=1000, trend_per_day=-0.2, cv=0.3, sold_per_day=20, total_sold=100)
+    hist = History(n_snaps=48, ref_price=1000, trend_per_day=-0.08, cv=0.3, sold_per_day=20, total_sold=100)
     s = dip_signal([(600, 10), (650, 100), (1100, 50)], hist, 10, True, FEES, TUN)
     assert s is not None and s.strategy == "DIP"
     assert s.buy_qty == 20 and s.sell_price == 900
     assert s.days_to_sell > 1                         # 90 other cheap units are ahead in the queue
     assert s.risk_level == "HIGH"
-    assert any("falling" in r for r in s.reasons)
+    assert any("drifting down" in r for r in s.reasons)
+    # a price still falling fast is not a dip
+    sliding = History(n_snaps=48, ref_price=1000, trend_per_day=-0.2, cv=0.3, sold_per_day=20, total_sold=100)
+    assert dip_signal([(600, 10), (650, 100), (1100, 50)], sliding, 10, True, FEES, TUN) is None
 
 
 def test_thin_history_keeps_recent_and_preserves_sales_total():
@@ -228,8 +231,9 @@ def test_export_prices_at_the_lowest_ceiling_and_nets_the_cut():
     assert sig.strategy == "EXPORT"
     assert sig.sell_price == 1000                       # what it sold for there, below both asks
     assert (sig.buy_qty, sig.buy_max_price, sig.buy_cost) == (10, 500, 5000)
-    # 15% cut, less the 3s deposit times the 16% chance-weighted expiries of a half-day sale
-    assert sig.profit == 10 * 850 - 5000 - 47
+    # 15% cut, less the 3s deposit times the expected expiries (0.58) of a sale that is
+    # predicted to take half a day and stretched to a full one, as exports run late
+    assert sig.profit == 10 * 850 - 5000 - 175
     assert sig.reasons[0].startswith("List on Blackwater")
     assert "Alliance pays 11s at home" in sig.reasons
 
@@ -318,7 +322,7 @@ def test_new_listings_at_the_same_price_jump_the_queue():
 def test_flip_slows_and_gets_riskier_when_few_sales_reach_the_relist_price():
     easy = flip_signal([(500, 5), (900, 100)], levelled(sold={900: 100}), 10, True, FEES, TUN)
     hard = flip_signal([(500, 5), (900, 100)], levelled(sold={520: 90, 900: 10}), 10, True, FEES, TUN)
-    assert hard.days_to_sell == 10 * easy.days_to_sell
+    assert 9 < hard.days_to_sell / easy.days_to_sell < 11
     assert any("10% of sales reach this price" in r for r in hard.reasons)
     crowded = flip_signal([(500, 5), (900, 100)], levelled(sold={900: 100}, new={900: 200}), 10, True, FEES, TUN)
     assert crowded.risk_score >= easy.risk_score + 25
@@ -537,3 +541,13 @@ def test_family_cap_trims_the_ladder_but_never_empties_it():
     out = without_junk(ladders, {}, TUN, {1: 12500, 2: 12500})
     assert out[1][1] == [(1500, 1)] and out[1][2] == [1]
     assert out[2][1] == [(90000, 1)]
+
+
+def test_gear_flips_and_exports_are_rated_riskier():
+    from forever_ah.signals import assess_risk
+    hist = levelled()
+    stack, _, _ = assess_risk("FLIP", 0.1, hist, is_commodity=True)
+    gear, _, why = assess_risk("FLIP", 0.1, hist, is_commodity=False)
+    export, _, _ = assess_risk("EXPORT", 0.1, hist)
+    assert gear == stack + 25 and any("Gear" in r for r in why)
+    assert export == stack + 35

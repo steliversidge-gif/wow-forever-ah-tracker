@@ -35,6 +35,7 @@ family_multiple = 10.0       # a "Feral Cloak of X" above 10x the median Feral C
 junk_multiple = 5.0          # listings above 5x the going price are junk: ignored as stock, prices and sales
 stats_retention_days = 7     # hourly per-item history kept in the database
 horizon_days = 1.0           # never suggest buying more than this many days of sales
+dip_max_fall = 0.10          # no DIP while the price is still falling faster than 10% a day
 dip_threshold = 0.25         # a "dip" is this far below the typical price
 min_profit = 100             # copper; hide signals below this
 min_roi = 0.05
