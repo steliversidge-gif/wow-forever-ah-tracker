@@ -36,6 +36,7 @@ junk_multiple = 5.0          # listings above 5x the going price are junk: ignor
 daily_retention_days = 90    # one summary row per item per day is kept this long
 stats_retention_days = 7     # hourly per-item history kept in the database
 horizon_days = 1.0           # never suggest buying more than this many days of sales
+dip_max_markup = 1.5         # a DIP resells for at most 1.5x the current market price
 dip_max_fall = 0.10          # no DIP while the price is still falling faster than 10% a day
 dip_threshold = 0.25         # a "dip" is this far below the typical price
 min_profit = 100             # copper; hide signals below this

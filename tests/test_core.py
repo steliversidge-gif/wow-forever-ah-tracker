@@ -543,13 +543,13 @@ def test_family_cap_trims_the_ladder_but_never_empties_it():
     assert out[2][1] == [(90000, 1)]
 
 
-def test_gear_flips_and_exports_are_rated_riskier():
+def test_exports_are_rated_riskier_and_gear_flips_are_not():
     from forever_ah.signals import assess_risk
     hist = levelled()
     stack, _, _ = assess_risk("FLIP", 0.1, hist, is_commodity=True)
-    gear, _, why = assess_risk("FLIP", 0.1, hist, is_commodity=False)
+    gear, _, _ = assess_risk("FLIP", 0.1, hist, is_commodity=False)
     export, _, _ = assess_risk("EXPORT", 0.1, hist)
-    assert gear == stack + 25 and any("Gear" in r for r in why)
+    assert gear == stack                 # since 12 Nov gear flips fill as often as stackable ones
     assert export == stack + 35
 
 
@@ -577,3 +577,11 @@ def test_daily_roll_up_keeps_items_that_sold_and_survives_pruning(tmp_path):
                  "VALUES (4, 114, '2026-11-13 00:25:00', 'x', 0, 0)")
     collector.roll_up_days(conn)
     assert conn.execute("SELECT sold_qty FROM item_daily WHERE day = '2026-11-11'").fetchone()[0] == 4.0
+
+
+def test_a_deep_dip_does_not_hope_for_the_full_typical_price():
+    hist = History(n_snaps=48, ref_price=1000, trend_per_day=0.0, cv=0.1, sold_per_day=50, total_sold=300)
+    shallow = dip_signal([(700, 10), (1100, 50)], hist, 10, True, FEES, TUN)
+    assert shallow.sell_price == 900                    # 90% of typical
+    deep = dip_signal([(300, 10), (1100, 50)], hist, 10, True, FEES, TUN)
+    assert deep.sell_price == 450                       # capped at 1.5x the current market price

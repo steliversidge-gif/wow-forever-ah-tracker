@@ -41,6 +41,9 @@ def cmd_run(args) -> int:
     dist_missing = not (settings.dist_path / "data" / "meta.json").exists()
     if updated or args.reanalyse or dist_missing:
         export.export_site(conn, settings)
+    # Seconds past the hour at which Blizzard last published, so the workflow can time its next run.
+    newest = conn.execute("SELECT MAX(published_at) FROM snapshots").fetchone()[0]
+    offset = int(newest[14:16]) * 60 + int(newest[17:19]) if newest else None
     db.checkpoint(conn)
     conn.close()
 
@@ -49,6 +52,8 @@ def cmd_run(args) -> int:
     if os.environ.get("GITHUB_OUTPUT"):  # lets the workflow skip upload/deploy when nothing changed
         with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
             fh.write(f"updated={'true' if changed else 'false'}\n")
+            if offset is not None:
+                fh.write(f"publish_offset={offset}\n")
     return 1 if failures else 0
 
 

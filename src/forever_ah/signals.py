@@ -29,7 +29,7 @@ import math
 from dataclasses import asdict, dataclass, replace
 
 from forever_ah.config import Fees, Tuning
-from forever_ah.pricing import Level, format_money, median
+from forever_ah.pricing import Level, format_money, market_price, median
 
 
 AT_PRICE = 0.97        # "at this price" means within 3% under it
@@ -297,12 +297,9 @@ def assess_risk(strategy: str, days_to_sell: float, hist: History, share: float 
         score += 15
         reasons.append("Relies on the price recovering")
 
-    # Scorecard, first day: gear flips filled 20% of the time against 49% for
-    # stackables, and half of all exports never filled.
-    if strategy == "FLIP" and not is_commodity:
-        score += 25
-        reasons.append("Gear: buyers choose by stats, so it sells less predictably than stackables")
-
+    # Scorecard: half of the first day's exports never filled. (Gear flips were
+    # briefly rated riskier too, on figures that mixed in recommendations from
+    # before the sales fixes; since 12 Nov gear fills 64% against 66%.)
     if strategy == "EXPORT":
         score += 35
         reasons.append("Blackwater is a thin market: half of past exports did not sell in time")
@@ -391,7 +388,10 @@ def dip_signal(levels: list[Level], hist: History, vendor: int | None, is_commod
     ceiling = hist.ref_price * (1 - tun.dip_threshold)
     if levels[0][0] > ceiling:
         return None
-    target = int(hist.ref_price * tun.dip_target)
+    # Scorecard, 12-13 Nov (1,300 dips): those hoping for over 1.5x the current
+    # market price filled 31% of the time, the rest 66%. A deep dip rarely comes
+    # all the way back in time, so the hoped-for price is capped.
+    target = int(min(hist.ref_price * tun.dip_target, market_price(levels) * tun.dip_max_markup))
     rate, share, pressure = demand_at(hist, target)
     if rate <= 0:
         return None

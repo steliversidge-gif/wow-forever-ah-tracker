@@ -4,7 +4,9 @@ name: Collect and publish
 # The SQLite database travels between runs as an asset on a release named
 # "state"; the dashboard is published to GitHub Pages.
 #
-# Timing: Blizzard publishes a new snapshot hourly at about :25:25.
+# Timing: Blizzard publishes a new snapshot hourly, at :25 past for the first
+# days and :19 since 13 Nov 2026. Each run reports when the newest snapshot was
+# published and the next run is timed about 100 seconds after that minute.
 #
 # GitHub's scheduler is unreliable here (no runs for the first hours, then one
 # in four hours), so the workflow also restarts itself: the "next" job waits
@@ -44,6 +46,7 @@ jobs:
       cancel-in-progress: false
     outputs:
       updated: ${{ steps.run.outputs.updated }}
+      publish_offset: ${{ steps.run.outputs.publish_offset }}
     steps:
       - uses: actions/checkout@v7
 
@@ -131,24 +134,26 @@ jobs:
     env:
       GH_REPO: ${{ github.repository }}
       UPDATED: ${{ needs.collect.outputs.updated }}
+      PUBLISH_OFFSET: ${{ needs.collect.outputs.publish_offset }}
     steps:
       - name: Wait, then start the next run
         run: |
           now=$(date -u +%s)
-          minute=$(( (now % 3600) / 60 ))
-          if [ "$UPDATED" != "true" ] && [ "$minute" -ge 26 ] && [ "$minute" -lt 50 ]; then
+          # Seconds past the hour at which Blizzard last published (default :25:25).
+          offset=${PUBLISH_OFFSET:-1525}
+          case "$offset" in ''|*[!0-9]*) offset=1525 ;; esac
+          since_publish=$(( ( (now % 3600) - offset + 3600 ) % 3600 ))
+          if [ "$UPDATED" != "true" ] && [ "$since_publish" -ge 35 ] && [ "$since_publish" -lt 1500 ]; then
             # Nothing new although the snapshot was due: it is late, so look again shortly.
             wait=300
+            published=$now
           else
-            target=$(( now - now % 3600 + 27 * 60 ))
+            target=$(( now - now % 3600 + offset + 95 ))
             if [ "$target" -le $(( now + 20 )) ]; then target=$(( target + 3600 )); fi
             wait=$(( target - now ))
+            # A run only covers the hour if it started after the snapshot was published.
+            published=$(( target - 90 ))
           fi
-          # A run only covers this hour if it started after the snapshot was
-          # published (:25:30) and after this wait began.
-          wake=$(( now + wait ))
-          published=$(( wake - wake % 3600 + 25 * 60 + 30 ))
-          if [ "$published" -lt "$now" ]; then published=$now; fi
           since=$(date -u -d "@$published" +%Y-%m-%dT%H:%M:%SZ)
           echo "Starting the next run in ${wait}s unless another run starts after $since"
           sleep "$wait"

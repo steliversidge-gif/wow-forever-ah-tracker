@@ -26,7 +26,8 @@ Pages. No server, no home PC left on, nothing to pay for.
   sells first, so matching beats undercutting.
 - **DIP** – the whole market is 25%+ under its typical price. Buy cheap, relist near
   typical. Slower, and it depends on the price recovering, so none is suggested while the
-  price is still falling faster than 10% a day.
+  price is still falling faster than 10% a day, and the resale price is never more than
+  1.5 times the current market price.
 - **CRAFT** – buy the materials, make the item, list it at the cheapest current price.
   Recipes come from Wowhead's Forever database; materials are priced at this house's market
   price, or the vendor price for everyday vendor-only supplies. The "Buy" and "Pay up to"
@@ -62,8 +63,8 @@ order book still shows every listing.
 later checked against what the market did ([scorecard.py](src/forever_ah/scorecard.py)).
 The base rates behind the sales estimates are re-measured from every hourly snapshot.
 Its first day changed three things: "sells in" is stretched for flips, crafts and exports
-(they ran late), dips on fast-falling prices were dropped, and gear flips and exports are
-rated riskier (they filled far less often than stackable flips).
+(they ran late), dips on fast-falling prices were dropped, exports are rated riskier, and
+deep dips no longer hope for the full typical price.
 
 Risk is a 0–100 score built from how fast the item sells, how much history backs the
 estimate, how volatile the price is, whether it is falling, how often buyers pay the
