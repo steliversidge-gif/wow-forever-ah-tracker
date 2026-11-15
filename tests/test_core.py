@@ -176,16 +176,18 @@ def test_no_flip_when_gap_does_not_cover_the_cut():
 
 
 def test_dip_signal_is_riskier_and_accounts_for_queue():
-    hist = History(n_snaps=48, ref_price=1000, trend_per_day=-0.08, cv=0.3, sold_per_day=20, total_sold=100)
-    s = dip_signal([(600, 10), (650, 100), (1100, 50)], hist, 10, True, FEES, TUN)
+    hist = History(n_snaps=48, ref_price=1000, trend_per_day=-0.08, cv=0.3, sold_per_day=80, total_sold=100)
+    book = [(600, 10), (650, 20), (800, 40), (1100, 50)]
+    s = dip_signal(book, hist, 10, True, FEES, TUN)
     assert s is not None and s.strategy == "DIP"
-    assert s.buy_qty == 20 and s.sell_price == 900
-    assert s.days_to_sell > 1                         # 90 other cheap units are ahead in the queue
-    assert s.risk_level == "HIGH"
+    assert s.buy_qty == 30 and s.sell_price == 900    # only what is 25%+ under typical
+    assert s.days_to_sell == 0.88                     # the 40 units at 8s sell before ours do
+    flip = flip_signal([(600, 30), (900, 50)], hist, 10, True, FEES, TUN)
+    assert s.risk_score > flip.risk_score             # a dip relies on the price recovering
     assert any("drifting down" in r for r in s.reasons)
     # a price still falling fast is not a dip
-    sliding = History(n_snaps=48, ref_price=1000, trend_per_day=-0.2, cv=0.3, sold_per_day=20, total_sold=100)
-    assert dip_signal([(600, 10), (650, 100), (1100, 50)], sliding, 10, True, FEES, TUN) is None
+    sliding = History(n_snaps=48, ref_price=1000, trend_per_day=-0.2, cv=0.3, sold_per_day=80, total_sold=100)
+    assert dip_signal(book, sliding, 10, True, FEES, TUN) is None
 
 
 def test_thin_history_keeps_recent_and_preserves_sales_total():
@@ -585,3 +587,20 @@ def test_a_deep_dip_does_not_hope_for_the_full_typical_price():
     assert shallow.sell_price == 900                    # 90% of typical
     deep = dip_signal([(300, 10), (1100, 50)], hist, 10, True, FEES, TUN)
     assert deep.sell_price == 450                       # capped at 1.5x the current market price
+
+
+def test_no_dip_that_would_take_over_a_day():
+    hist = History(n_snaps=48, ref_price=1000, trend_per_day=0.0, cv=0.1, sold_per_day=20, total_sold=100)
+    quick = dip_signal([(600, 10), (1100, 50)], hist, 10, True, FEES, TUN)
+    assert quick is not None and quick.days_to_sell <= 1
+    # 100 cheaper units are ahead in the queue: five days of sales
+    assert dip_signal([(600, 10), (650, 100), (1100, 50)], hist, 10, True, FEES, TUN) is None
+
+
+def test_hour_profile_measures_the_daily_cycle():
+    from forever_ah.export import hour_profile
+    day = 86400
+    points = [(d * day + h * 3600, 110 if h < 12 else 90) for d in range(3) for h in range(24)]
+    profile = hour_profile(points)
+    assert profile[3] == 0.1 and profile[20] == -0.1
+    assert hour_profile(points[:30]) is None          # one full day is not enough

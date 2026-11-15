@@ -222,7 +222,10 @@ def analyse_house(conn: sqlite3.Connection, house_id: int, settings: Settings) -
         vendor_price, source = vendor.get(variant_id, (None, None))
         verified = bool(source and "forever" in source)
         for sig in evaluate(levels, hist, vendor_price, verified, bool(is_commodity), fees, tun):
-            keep(variant_id, sig)
+            # Blackwater is too thin to trade within: scorecard, 13-15 Nov, its dips
+            # filled 43% and its flips 69%, against 65% and 81% in the faction houses.
+            if makes_things or sig.strategy not in ("FLIP", "DIP"):
+                keep(variant_id, sig)
         if not makes_things:
             continue
         sig = craft(variant_id, levels, hist, bool(is_commodity))

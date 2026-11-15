@@ -11,10 +11,10 @@ Pages. No server, no home PC left on, nothing to pay for.
 
 | Page | What it is for |
 |---|---|
-| **Buy list** | One row per trade: how many to buy, the most to pay, what to sell each for, profit after the house cut, how long it should take to sell, and a risk rating with the reasons behind it. Filter by budget, minimum profit, risk and play. |
-| **Market** | Every listed item with its cheapest price, typical price, trend and estimated sales per day. Use it to price things you want to sell. |
+| **Buy list** | One row per trade: how many to buy, the most to pay, what to sell each for, profit after the house cut, how long it should take to sell, and a risk rating with the reasons behind it. Filter by budget, minimum profit, risk, play, auction house category and your own professions. A note says whether now is the cheap or the dear part of the day. |
+| **Market** | Every listed item with its cheapest price, typical price, trend, estimated sales per day and days of stock. Filter by category, or show only shortages (selling fast, little stock) or gluts (days of stock, falling price). |
 | **Farm** | Items you can go and get (herbs, ore, skins, fish, drops), ranked by how much gold the market pays out for them a day, with days of stock on sale. No buying involved. |
-| **Item page** | Price history and estimated sales by the hour, the order book with the running cost of buying it out. |
+| **Item page** | Price history and estimated sales by the hour, the item's usual price at each hour of the day, a day-by-day view, and the order book with the running cost of buying it out. |
 | **Cross-faction** | Every EXPORT trade in both directions: buy in one faction's house, list on Blackwater for the other faction. |
 | **Status** | Collector health, the scorecard (did past recommendations work?), when things sell by hour of day, the measured base rates, and the one-off "which house is mine?" setup. |
 
@@ -26,8 +26,9 @@ Pages. No server, no home PC left on, nothing to pay for.
   sells first, so matching beats undercutting.
 - **DIP** – the whole market is 25%+ under its typical price. Buy cheap, relist near
   typical. Slower, and it depends on the price recovering, so none is suggested while the
-  price is still falling faster than 10% a day, and the resale price is never more than
-  1.5 times the current market price.
+  price is still falling faster than 10% a day or the sale would take over a day, and the
+  resale price is never more than 1.5 times the current market price. Not suggested on
+  Blackwater, and neither are flips: it is too thin to trade within.
 - **CRAFT** – buy the materials, make the item, list it at the cheapest current price.
   Recipes come from Wowhead's Forever database; materials are priced at this house's market
   price, or the vendor price for everyday vendor-only supplies. The "Buy" and "Pay up to"

@@ -412,6 +412,8 @@ def dip_signal(levels: list[Level], hist: History, vendor: int | None, is_commod
     # (stock AT our price is behind us: the newest listing sells first).
     ahead = sum(q for p, q in levels if p < target) - qty
     days = max(ahead, 0) / hist.sold_per_day + qty / rate
+    if days > tun.dip_max_days:   # scorecard, 13-15 Nov: dips predicted to take over a day filled 42%
+        return None
     return _finish("DIP", qty, max_price, cost, target, days, hist, vendor, is_commodity, fees, tun,
                    share, pressure)
 

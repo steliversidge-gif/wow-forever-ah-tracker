@@ -4,8 +4,43 @@
 const $ = (s, root = document) => root.querySelector(s);
 const view = $('#view'), tip = $('#tip');
 const S = { meta: null, houseId: null, cache: {} };
-const F = { budget: '', minProfit: 10, risk: 'HIGH', play: '', q: '', sort: 'profit' };   // buy list filters
-const M = { q: '', sort: 'sold', cls: '' };                                               // market filters
+const F = { budget: '', minProfit: 10, risk: 'HIGH', play: '', q: '', sort: 'profit', cat: '' };   // buy list filters
+const M = { q: '', sort: 'sold', cat: '', show: '' };                                             // market filters
+
+// The auction house's own top-level categories -> the item classes in the data.
+const CATS = {
+  'Weapons': ['Weapon'], 'Armor': ['Armor'], 'Containers': ['Container'], 'Consumables': ['Consumable'],
+  'Trade Goods': ['Trade Goods', 'Reagent'], 'Ammo': ['Projectile', 'Quiver'], 'Recipes': ['Recipe'],
+  'Quest Items': ['Quest', 'Key'], 'Miscellaneous': ['Miscellaneous', null, undefined, ''],
+};
+const inCat = (cls, cat) => !cat || (CATS[cat] || []).includes(cls);
+const catSelect = id => `<label>Category<select id="${id}"><option value="">All</option>${
+  Object.keys(CATS).map(c => `<option>${c}</option>`).join('')}</select></label>`;
+
+// "My professions": remembered in this browser only.
+const PROFS = { mine: new Set() };
+try { PROFS.mine = new Set(JSON.parse(localStorage.getItem('fah-professions') || '[]')); } catch { /* private window */ }
+function saveProfs() {
+  try { localStorage.setItem('fah-professions', JSON.stringify([...PROFS.mine])); } catch { /* not remembered */ }
+}
+// The house's daily price cycle (24 UTC values, share above or below the day's average) in local hours.
+function localCycle(utc) {
+  const local = Array.from({ length: 24 }, () => null);
+  (utc || []).forEach((v, hour) => { local[new Date(Date.UTC(2026, 0, 1, hour)).getHours()] = v; });
+  return local;
+}
+const hh = h => String(h).padStart(2, '0') + ':00';
+function cycleNote(utc) {
+  const local = localCycle(utc), known = local.map((v, h) => [v, h]).filter(x => x[0] != null);
+  if (known.length < 20) return '';
+  const low = known.reduce((a, b) => b[0] < a[0] ? b : a), high = known.reduce((a, b) => b[0] > a[0] ? b : a);
+  const now = local[new Date().getHours()];
+  const state = now == null ? '' : now <= -0.02 ? ` Right now they are typically <b>${pct(-now)} below</b> the day's average: a better time to buy than to list.`
+    : now >= 0.02 ? ` Right now they are typically <b>${pct(now)} above</b> the day's average: a better time to list than to buy.`
+    : ' Right now they are close to the day\'s average.';
+  return `<div class="note"><b>Daily cycle.</b> Busy stackable goods in this house are usually cheapest around
+    ${hh(low[1])} (${pct(low[0], true)}) and dearest around ${hh(high[1])} (${pct(high[0], true)}), your local time.${state}</div>`;
+}
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -77,7 +112,7 @@ const PLAY = {
   CRAFT: 'Buy the materials, make it, list it',
   DISENCHANT: 'Buy it, disenchant it, sell the materials',
 };
-const G = { q: '', how: '', sort: 'gold', minPrice: '' };                                  // farm filters
+const G = { q: '', how: '', sort: 'gold', minPrice: '', cat: '' };                                  // farm filters
 const sellCell = s => money(s.sell_price) + (s.strategy === 'VENDOR' ? ''
   : s.strategy === 'DISENCHANT' ? '<span class="why">in materials</span>' : `<span class="why">${
   [s.strategy === 'EXPORT' ? 'on Blackwater' : '', s.list_hours ? `list ${s.list_hours}h` : ''].filter(Boolean).join(' · ')}</span>`);
@@ -87,6 +122,7 @@ const payCell = s => money(s.buy_max_price) + (s.strategy === 'CRAFT' ? '<span c
 // ---------------------------------------------------------------- buy list --
 async function viewBuy() {
   const h = houseMeta(S.houseId), d = await loadHouse(S.houseId);
+  const profs = [...new Set(d.signals.map(s => s.profession).filter(Boolean))].sort();
   view.innerHTML = `
     <h1>Buy list — ${esc(houseLabel(h))}</h1>
     <p class="lead">Each row is one trade: what to buy in this auction house, the most to pay per unit,
@@ -105,16 +141,23 @@ async function viewBuy() {
         <option value="CRAFT">Craft</option><option value="DISENCHANT">Disenchant</option></select></label>
       <label>Sort by<select id="f-sort"><option value="profit">Profit</option><option value="roi">Return</option>
         <option value="risk">Lowest risk</option><option value="speed">Fastest sale</option></select></label>
+      ${catSelect('f-cat')}
       <label>Search<input id="f-q" type="search" placeholder="item name" value="${esc(F.q)}"></label>
     </div>
+    ${profs.length ? `<div class="chips" id="f-profs"><span>My professions</span>${profs.map(pr => `<label>
+      <input type="checkbox" value="${esc(pr)}"${PROFS.mine.has(pr) ? ' checked' : ''}>${esc(pr)}</label>`).join('')}
+      <span class="muted">Tick yours to hide crafts (and disenchants) you cannot do. Nothing ticked shows everything.</span></div>` : ''}
+    ${cycleNote(h.price_by_hour)}
     <div id="buy-out"></div>`;
-  $('#f-risk').value = F.risk; $('#f-play').value = F.play; $('#f-sort').value = F.sort;
+  $('#f-risk').value = F.risk; $('#f-play').value = F.play; $('#f-sort').value = F.sort; $('#f-cat').value = F.cat;
 
   const draw = () => {
     const budget = F.budget === '' ? Infinity : Number(F.budget) * 10000;
     const minProfit = Number(F.minProfit || 0) * 100, q = F.q.trim().toLowerCase();
     let rows = d.signals.filter(s => s.buy_cost <= budget && s.profit >= minProfit
       && RISK_RANK[s.risk_level] <= RISK_RANK[F.risk] && (!F.play || s.strategy === F.play)
+      && inCat(s.item_class, F.cat)
+      && (!s.profession || !PROFS.mine.size || PROFS.mine.has(s.profession))
       && (!q || s.name.toLowerCase().includes(q)));
     const sorters = {
       profit: (a, b) => b.profit - a.profit, roi: (a, b) => b.roi - a.roi,
@@ -148,32 +191,56 @@ async function viewBuy() {
   };
   const bind = (id, key) => $(id).addEventListener('input', e => { F[key] = e.target.value; draw(); });
   bind('#f-budget', 'budget'); bind('#f-profit', 'minProfit'); bind('#f-risk', 'risk');
-  bind('#f-play', 'play'); bind('#f-sort', 'sort'); bind('#f-q', 'q');
+  bind('#f-play', 'play'); bind('#f-sort', 'sort'); bind('#f-q', 'q'); bind('#f-cat', 'cat');
+  if (profs.length) {
+    $('#f-profs').addEventListener('change', e => {
+      if (e.target.checked) PROFS.mine.add(e.target.value); else PROFS.mine.delete(e.target.value);
+      saveProfs(); draw();
+    });
+  }
   draw();
 }
 
 // ------------------------------------------------------------------ market --
 async function viewMarket() {
   const h = houseMeta(S.houseId), d = await loadHouse(S.houseId);
-  const classes = [...new Set(d.items.map(x => x.item_class).filter(Boolean))].sort();
   view.innerHTML = `
     <h1>Market — ${esc(houseLabel(h))}</h1>
     <p class="lead">Every item currently listed. Use it to price something you want to sell:
       "Typical" is the median hourly price over the last week.</p>
     <div class="filters">
       <label>Search<input id="m-q" type="search" placeholder="item name" value="${esc(M.q)}"></label>
-      <label>Type<select id="m-cls"><option value="">All</option>${classes.map(c => `<option>${esc(c)}</option>`).join('')}</select></label>
+      ${catSelect('m-cat')}
+      <label>Show<select id="m-show"><option value="">Everything</option>
+        <option value="short">Shortages: selling fast, little stock</option>
+        <option value="glut">Gluts: days of stock, price falling</option></select></label>
       <label>Sort by<select id="m-sort"><option value="sold">Most sold per day</option>
+        <option value="gold">Most gold traded per day</option>
         <option value="discount">Furthest below typical</option><option value="price">Highest price</option>
         <option value="qty">Most stock</option></select></label>
-    </div><div id="m-out"></div>`;
-  $('#m-cls').value = M.cls; $('#m-sort').value = M.sort;
+    </div><div id="m-note"></div><div id="m-out"></div>`;
+  $('#m-cat').value = M.cat; $('#m-sort').value = M.sort; $('#m-show').value = M.show;
   const disc = x => x.ref_price ? x.min_price / x.ref_price - 1 : null;
+  const gold = x => (x.sold_per_day || 0) * (x.ref_price || x.market_price || 0);
+  const stockDays = x => x.sold_per_day > 0 ? x.quantity / x.sold_per_day : null;
+  // Only items with a real market count: 50g+ traded a day and 20+ observed sales.
+  const busy = x => gold(x) >= 500000 && x.total_sold >= 20 && !x.name.includes('[variant');
+  const SHOW = {
+    short: x => busy(x) && stockDays(x) < 0.25 && x.ref_price && x.min_price >= x.ref_price,
+    glut: x => busy(x) && stockDays(x) > 3 && x.trend_per_day != null && x.trend_per_day < -0.05,
+  };
+  const NOTE = {
+    short: 'Under six hours of stock on sale and the price at or above typical: good things to farm, craft or bring to market now.',
+    glut: 'Over three days of stock on sale and the price falling more than 5% a day: avoid buying these to resell, and expect a lower price if you sell.',
+  };
   const draw = () => {
     const q = M.q.trim().toLowerCase();
-    let rows = d.items.filter(x => (!q || x.name.toLowerCase().includes(q)) && (!M.cls || x.item_class === M.cls));
+    let rows = d.items.filter(x => (!q || x.name.toLowerCase().includes(q)) && inCat(x.item_class, M.cat)
+      && (!M.show || SHOW[M.show](x)));
+    $('#m-note').innerHTML = M.show ? `<div class="note">${NOTE[M.show]}</div>` : '';
     const sorters = {
       sold: (a, b) => (b.sold_per_day ?? -1) - (a.sold_per_day ?? -1) || b.quantity - a.quantity,
+      gold: (a, b) => gold(b) - gold(a),
       discount: (a, b) => (disc(a) ?? 9) - (disc(b) ?? 9),
       price: (a, b) => b.min_price - a.min_price, qty: (a, b) => b.quantity - a.quantity,
     };
@@ -182,14 +249,15 @@ async function viewMarket() {
     $('#m-out').innerHTML = `<p class="muted">${num(total)} item${total === 1 ? '' : 's'}${total > 300 ? ' (showing 300)' : ''}</p>
       <div class="table-wrap"><table><thead><tr><th>Item</th><th class="num">Cheapest</th><th class="num">Typical</th>
       <th class="num">vs typical</th><th class="num">Trend / day</th><th class="num">Sold / day</th>
-      <th class="num">In stock</th><th class="num">Listings</th></tr></thead><tbody>${rows.map(x => `<tr>
+      <th class="num">In stock</th><th class="num">Days of stock</th><th class="num">Listings</th></tr></thead><tbody>${rows.map(x => `<tr>
       <td class="item">${itemLink(x)}</td><td class="num">${money(x.min_price)}</td><td class="num">${money(x.ref_price)}</td>
       <td class="num">${pct(disc(x), true)}</td><td class="num">${pct(x.trend_per_day, true)}</td>
-      <td class="num">${num(x.sold_per_day, 1)}</td><td class="num">${num(x.quantity)}</td><td class="num">${num(x.listings)}</td>
+      <td class="num">${num(x.sold_per_day, 1)}</td><td class="num">${num(x.quantity)}</td>
+      <td class="num">${stockDays(x) == null ? '–' : num(stockDays(x), 1)}</td><td class="num">${num(x.listings)}</td>
       </tr>`).join('')}</tbody></table></div>`;
   };
   const bind = (id, key) => $(id).addEventListener('input', e => { M[key] = e.target.value; draw(); });
-  bind('#m-q', 'q'); bind('#m-cls', 'cls'); bind('#m-sort', 'sort');
+  bind('#m-q', 'q'); bind('#m-cat', 'cat'); bind('#m-sort', 'sort'); bind('#m-show', 'show');
   draw();
 }
 
@@ -209,17 +277,19 @@ async function viewFarm() {
     <div class="filters">
       <label>Search<input id="g-q" type="search" placeholder="item name" value="${esc(G.q)}"></label>
       <label>How you get it<select id="g-how"><option value="">Any</option>${ways.map(w => `<option>${esc(w)}</option>`).join('')}</select></label>
+      ${catSelect('g-cat')}
       <label>Worth at least (silver)<input id="g-min" type="number" min="0" step="1" placeholder="any" value="${esc(G.minPrice)}"></label>
       <label>Sort by<select id="g-sort"><option value="gold">Gold paid out per day</option><option value="price">Highest price</option>
         <option value="sold">Most sold per day</option><option value="stock">Fewest days of stock</option></select></label>
     </div><div id="g-out"></div>`;
-  $('#g-how').value = G.how; $('#g-sort').value = G.sort;
+  $('#g-how').value = G.how; $('#g-sort').value = G.sort; $('#g-cat').value = G.cat;
   const price = x => x.ref_price || x.market_price;
   const gold = x => (x.sold_per_day || 0) * price(x);
   const stock = x => x.sold_per_day ? x.quantity / x.sold_per_day : null;
   const draw = () => {
     const q = G.q.trim().toLowerCase(), min = Number(G.minPrice || 0) * 100;
     let rows = d.items.filter(x => x.farmable && x.sold_per_day > 0 && price(x) >= min && !x.name.includes('[variant')
+      && inCat(x.item_class, G.cat)
       && (!q || x.name.toLowerCase().includes(q)) && (!G.how || (x.how || '').split(', ').includes(G.how)));
     const sorters = {
       gold: (a, b) => gold(b) - gold(a), price: (a, b) => price(b) - price(a),
@@ -239,7 +309,7 @@ async function viewFarm() {
         : `Still collecting: sales rates need 6 hours of history, which is 7 hourly snapshots in a row. ${h.n_snaps} collected so far.`}</div>`;
   };
   const bind = (id, key) => $(id).addEventListener('input', e => { G[key] = e.target.value; draw(); });
-  bind('#g-q', 'q'); bind('#g-how', 'how'); bind('#g-min', 'minPrice'); bind('#g-sort', 'sort');
+  bind('#g-q', 'q'); bind('#g-how', 'how'); bind('#g-min', 'minPrice'); bind('#g-sort', 'sort'); bind('#g-cat', 'cat');
   draw();
 }
 
@@ -290,6 +360,10 @@ async function viewItem(variantId) {
       <th class="num">Market price</th><th class="num">Cheapest</th><th class="num">Sold</th><th class="num">In stock</th></tr></thead>
       <tbody>${hist.t.map((t, i) => `<tr><td>${hourClock(t)}</td><td class="num">${money(hist.p[i])}</td>
       <td class="num">${money(hist.m[i])}</td><td class="num">${num(hist.s[i])}</td><td class="num">${num(hist.q[i])}</td></tr>`).reverse().join('')}</tbody></table></div></details>
+    ${hist.h ? `<h2>Price by hour of day</h2>
+    <p class="muted">How far this item's price usually sits above or below its own daily average at each hour, in your
+      local time, over the days tracked so far. Buy in the low hours; list in the high ones.</p>
+    <div class="chart" id="c-cycle"></div>` : ''}
     ${hist.d ? `<h2>Day by day (up to 90 days)</h2>
     <p class="muted">Average market price and units sold for each day the item sold. Days are UTC; today is still filling.</p>
     <div class="chart" id="c-dprice"></div><div class="chart" id="c-dsold"></div>` : ''}
@@ -299,6 +373,7 @@ async function viewItem(variantId) {
         let run = 0;
         return (hist.ladder || []).map(([p, q]) => { run += p * q; return `<tr><td class="num">${money(p)}</td><td class="num">${num(q)}</td><td class="num">${money(run)}</td></tr>`; }).join('');
       })()}</tbody></table></div>`;
+  if (hist.h) cycleChart($('#c-cycle'), hist.h);
   if (hist.d) {
     lineChart($('#c-dprice'), hist.d.t, [{ name: 'Average market price', color: 'var(--series-1)', values: hist.d.p }], dayLabel);
     barChart($('#c-dsold'), hist.d.t, hist.d.s, 'Sold that day', dayLabel);
@@ -394,6 +469,38 @@ function lineChart(el, t, series, when) {
     });
     return `<b>${(when || hourClock)(t[i])}</b><br>` + series.map(s => `<span class="sw" style="background:${s.color}"></span>${s.name}: <b>${money(s.values[i])}</b>`).join('<br>');
   });
+}
+// Bars above and below a zero line: an item's usual price against its daily average, by local hour.
+function cycleChart(el, utc) {
+  const local = localCycle(utc), vals = local.filter(v => v != null);
+  const W = 800, H = 220, l = 48, r = 12, top = 12, b = 24;
+  const hi = Math.max(0.02, ...vals.map(Math.abs)) * 1.1;
+  const y = v => top + (1 - (v + hi) / (2 * hi)) * (H - top - b), slot = (W - l - r) / 24, w = slot - 4;
+  let svg = '';
+  for (const v of niceTicks(-hi, hi, 4)) {
+    svg += `<line x1="${l}" x2="${W - r}" y1="${y(v)}" y2="${y(v)}" stroke="${Math.abs(v) < 1e-9 ? 'var(--text-3)' : 'var(--grid)'}"/>
+            <text x="${l - 6}" y="${y(v) + 4}" text-anchor="end">${pct(v, true)}</text>`;
+  }
+  local.forEach((v, h) => {
+    const cx = l + slot * h + slot / 2;
+    if (h % 3 === 0) svg += `<text x="${cx}" y="${H - 6}" text-anchor="middle">${hh(h)}</text>`;
+    if (v == null) return;
+    const a = y(Math.max(v, 0)), hgt = Math.max(1, Math.abs(y(v) - y(0)));
+    svg += `<rect data-h="${h}" x="${(cx - w / 2).toFixed(1)}" y="${a.toFixed(1)}" width="${w.toFixed(1)}" height="${hgt.toFixed(1)}" rx="${Math.min(3, hgt / 2)}" fill="var(--series-${v >= 0 ? 2 : 1})"/>`;
+  });
+  el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Price against the daily average by hour of day, bar chart">${svg}</svg>`;
+  const svgEl = $('svg', el);
+  svgEl.addEventListener('mousemove', ev => {
+    const box = svgEl.getBoundingClientRect();
+    const h = Math.floor(((ev.clientX - box.left) / box.width * W - l) / slot), v = local[h];
+    el.querySelectorAll('rect').forEach(q => q.setAttribute('opacity', Number(q.dataset.h) === h ? 1 : 0.45));
+    if (v == null) { tip.hidden = true; return; }
+    tip.innerHTML = `<b>${hh(h)}</b><br>Usually <b>${pct(Math.abs(v))} ${v >= 0 ? 'above' : 'below'}</b> the day's average`;
+    tip.hidden = false;
+    tip.style.left = Math.min(ev.clientX + 14, innerWidth - tip.offsetWidth - 8) + 'px';
+    tip.style.top = (ev.clientY + 14) + 'px';
+  });
+  svgEl.addEventListener('mouseleave', () => { tip.hidden = true; el.querySelectorAll('rect').forEach(q => q.setAttribute('opacity', 1)); });
 }
 function barChart(el, t, values, label, when) {
   const f = frame(t, 0, Math.max(...values, 1), v => num(v), when);

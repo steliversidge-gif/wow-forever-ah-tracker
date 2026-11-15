@@ -19,7 +19,7 @@ from pathlib import Path
 from forever_ah import scorecard
 from forever_ah.collector import measured_rates, tracked_houses, utcnow
 from forever_ah.config import Settings
-from forever_ah.professions import how_obtained, is_farmable
+from forever_ah.professions import PROFESSIONS, how_obtained, is_farmable
 
 log = logging.getLogger(__name__)
 HISTORY_CHUNKS = 32
@@ -58,6 +58,32 @@ def thin_history(points: list[tuple], recent_hours: int = 48, bucket: int = 3) -
     return out + [p for p in points if p[0] >= cutoff]
 
 
+def hour_profile(points: list[tuple[int, int | None]], min_per_day: int = 12, min_days: int = 2,
+                 min_hours: int = 18) -> list[float | None] | None:
+    """How an item's price moves through the day: for each UTC hour, its average
+    distance from that day's mean price (+0.05 = 5% dearer than the day's average).
+
+    points: (epoch, market price). Only days with enough priced hours count, so
+    a half-collected day cannot skew it. None when there is too little to say.
+    """
+    days: dict[int, list[tuple[int, int]]] = {}
+    for epoch, price in points:
+        if price:
+            days.setdefault(epoch // 86400, []).append(((epoch % 86400) // 3600, price))
+    hours: list[list[float]] = [[] for _ in range(24)]
+    used = 0
+    for day_points in days.values():
+        if len(day_points) < min_per_day:
+            continue
+        used += 1
+        mean = sum(price for _, price in day_points) / len(day_points)
+        for hour, price in day_points:
+            hours[hour].append(price / mean - 1)
+    if used < min_days or sum(1 for h in hours if h) < min_hours:
+        return None
+    return [round(sum(h) / len(h), 3) if h else None for h in hours]
+
+
 def export_house(conn: sqlite3.Connection, house_id: int, data_dir: Path, settings: Settings) -> dict:
     market = conn.execute(
         f"SELECT m.variant_id, v.item_id, {NAME_SQL}, i.quality, i.item_class, m.is_commodity, m.min_price, "
@@ -70,14 +96,18 @@ def export_house(conn: sqlite3.Connection, house_id: int, data_dir: Path, settin
     signals = [
         {**dict(r), "reasons": json.loads(r["reasons"])}
         for r in conn.execute(
-            f"SELECT s.variant_id, v.item_id, {NAME_SQL} AS name, i.quality, s.strategy, s.buy_qty, "
+            f"SELECT s.variant_id, v.item_id, {NAME_SQL} AS name, i.quality, i.item_class, f.skill, s.strategy, s.buy_qty, "
             "s.buy_max_price, s.buy_cost, s.sell_price, s.profit, s.roi, s.days_to_sell, s.risk_score, "
             "s.risk_level, s.reasons, s.list_hours, ROUND(m.sold_per_day, 2) AS sold_per_day, m.ref_price "
             "FROM signals s JOIN variants v ON v.variant_id = s.variant_id "
-            "LEFT JOIN items i ON i.item_id = v.item_id "
+            "LEFT JOIN items i ON i.item_id = v.item_id LEFT JOIN item_facts f ON f.item_id = v.item_id "
             "LEFT JOIN market m ON m.house_id = s.house_id AND m.variant_id = s.variant_id "
             "WHERE s.house_id = ? ORDER BY s.profit DESC", (house_id,))
     ]
+    for s in signals:   # which profession the trade needs, for the "my professions" filter
+        skill = s.pop("skill")
+        s["profession"] = ("Enchanting" if s["strategy"] == "DISENCHANT"
+                           else PROFESSIONS.get(skill, "Other") if s["strategy"] == "CRAFT" else None)
     _write(data_dir / f"house-{house_id}.json",
            {"signals": signals, "market": {"cols": MARKET_COLS, "rows": [list(r) for r in market]}})
 
@@ -95,14 +125,27 @@ def export_house(conn: sqlite3.Connection, house_id: int, data_dir: Path, settin
     rows = conn.execute(
         "SELECT variant_id, snapshot_id, market_price, min_price, sold_qty, quantity FROM item_stats "
         "WHERE house_id = ? ORDER BY variant_id, snapshot_id", (house_id,))
+    # The house's daily price cycle is the average over its busiest stackable goods.
+    busy = {r[0] for r in market if r[5] and (r[12] or 0) >= 500}
+    cycle: list[list[float]] = [[] for _ in range(24)]
     for variant_id, group in groupby(rows, key=lambda r: r[0]):
         if variant_id not in charted:
             continue
-        points = thin_history([(snap_time[r[1]], r[2], r[3], r[4], r[5]) for r in group if r[1] in snap_time])
-        chunks[variant_id % HISTORY_CHUNKS][variant_id] = {
+        full = [(snap_time[r[1]], r[2], r[3], r[4], r[5]) for r in group if r[1] in snap_time]
+        points = thin_history(full)
+        entry = chunks[variant_id % HISTORY_CHUNKS][variant_id] = {
             "t": [p[0] for p in points], "p": [p[1] for p in points], "m": [p[2] for p in points],
             "s": [p[3] for p in points], "q": [p[4] for p in points],
         }
+        profile = hour_profile([(p[0], p[1]) for p in full])
+        if profile:
+            entry["h"] = profile
+            if variant_id in busy:
+                for hour, value in enumerate(profile):
+                    if value is not None:
+                        cycle[hour].append(value)
+    price_by_hour = ([round(sum(h) / len(h), 3) if h else None for h in cycle]
+                     if min((len(h) for h in cycle), default=0) >= 20 else None)
     # The long view: one point per day for up to daily_retention_days.
     daily = conn.execute(
         "SELECT variant_id, day, market_price, sold_qty, quantity FROM item_daily WHERE house_id = ? "
@@ -123,7 +166,7 @@ def export_house(conn: sqlite3.Connection, house_id: int, data_dir: Path, settin
             entry["ladder"] = [[r[1], r[2]] for _, r in zip(range(depth), group)]
     for n, chunk in enumerate(chunks):
         _write(data_dir / f"hist-{house_id}-{n}.json", chunk)
-    return {"n_items": len(market), "n_signals": len(signals)}
+    return {"n_items": len(market), "n_signals": len(signals), "price_by_hour": price_by_hour}
 
 
 def sales_by_day(conn: sqlite3.Connection, house_id: int) -> list[dict]:

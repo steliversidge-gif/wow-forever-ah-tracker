@@ -37,6 +37,7 @@ class Tuning:
     dip_threshold: float = 0.25
     dip_target: float = 0.90            # resell a dip at 90% of the typical price
     dip_max_markup: float = 1.5         # a DIP never hopes for more than 1.5x the current market price
+    dip_max_days: float = 1.0           # no DIP expected to take longer than this to sell
     dip_max_fall: float = 0.10          # no DIP while the price is falling faster than this a day
     min_history_snaps: int = 6
     min_profit: int = 100
