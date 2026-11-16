@@ -33,6 +33,14 @@ class Tuning:
     max_gap_hours: float = 3.0          # longer gaps between snapshots: outcomes are unknowable
     noncommodity_tolerance: float = 1.2 # gear sells up to 20% above the cheapest survivor
     horizon_days: float = 1.0
+    # How far "sells in" is stretched beyond the raw estimate. These are starting values:
+    # with auto_stretch on, the scorecard re-tunes each one daily (see scorecard.recalibrate).
+    stretch_flip: float = 1.5
+    stretch_dip: float = 1.0
+    stretch_craft: float = 1.5
+    stretch_export: float = 2.0
+    auto_stretch: bool = True
+    repeat_miss_penalty: int = 15       # risk points added when the same trade missed last time
     max_levels: int = 40
     dip_threshold: float = 0.25
     dip_target: float = 0.90            # resell a dip at 90% of the typical price

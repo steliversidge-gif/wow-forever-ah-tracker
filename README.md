@@ -66,6 +66,10 @@ order book still shows every listing.
 
 **The scorecard keeps it honest.** Every recommendation is logged when first made and
 later checked against what the market did ([scorecard.py](src/forever_ah/scorecard.py)).
+Its strictest test, "sold, net of competition", subtracts listings other sellers posted at
+the same price afterwards; that figure appears under each risk rating on the Buy list as
+the trade's track record. The scorecard also re-tunes how far "sells in" is stretched,
+daily, and a trade that missed last time is rated riskier.
 The base rates behind the sales estimates are re-measured from every hourly snapshot.
 Its first day changed three things: "sells in" is stretched for flips, crafts and exports
 (they ran late), dips on fast-falling prices were dropped, exports are rated riskier, and
@@ -76,6 +80,8 @@ estimate, how volatile the price is, whether it is falling, how often buyers pay
 relist price, and how much competing stock is posted at it. Every signal
 lists its reasons in plain English. All definitions live in one file,
 [src/forever_ah/signals.py](src/forever_ah/signals.py).
+
+If something breaks or the game changes, see [MAINTENANCE.md](MAINTENANCE.md).
 
 ## How it works
 

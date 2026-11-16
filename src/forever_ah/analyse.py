@@ -5,13 +5,16 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from itertools import groupby
 
 from forever_ah.config import FACTIONS, Settings
 from forever_ah.pricing import junk_ceiling, market_price, median
+from forever_ah import scorecard
 from forever_ah.professions import COOLDOWN_DAYS, PROFESSIONS, VENDOR_ONLY, disenchant_yield
 from forever_ah.signals import (
+    _risk_level,
     build_history,
     craft_signal,
     NEW_RECIPE_FROM,
@@ -135,7 +138,8 @@ def _vendor_prices(conn: sqlite3.Connection) -> dict[int, tuple[int, str | None]
 
 
 def analyse_house(conn: sqlite3.Connection, house_id: int, settings: Settings) -> int:
-    tun = settings.tuning
+    tun = scorecard.calibrated(conn, settings.tuning)
+    missed_before = {k for k, outcome in scorecard.last_outcomes(conn, house_id).items() if outcome == "MISSED"}
     house = conn.execute("SELECT * FROM houses WHERE house_id = ?", (house_id,)).fetchone()
     fees = house_fees(settings.fees, house["faction"])
 
@@ -212,6 +216,12 @@ def analyse_house(conn: sqlite3.Connection, house_id: int, settings: Settings) -
                             COOLDOWN_DAYS.get(item_id), is_new(f))
 
     def keep(variant_id: int, sig) -> None:
+        # A trade that missed the last time it was recommended misses again about twice as
+        # often as one that sold (scorecard, 13-16 Nov: flips 26% against 12%).
+        if (variant_id, sig.strategy) in missed_before and tun.repeat_miss_penalty:
+            score = min(100, sig.risk_score + tun.repeat_miss_penalty)
+            sig = replace(sig, risk_score=score, risk_level=_risk_level(score),
+                          reasons=sig.reasons + ["Did not sell at this price the last time it was recommended"])
         signal_rows.append((
             house_id, variant_id, sig.strategy, sig.buy_qty, sig.buy_max_price, sig.buy_cost,
             sig.sell_price, sig.profit, sig.roi, sig.days_to_sell, sig.risk_score, sig.risk_level,
@@ -307,6 +317,7 @@ def analyse_exports(conn: sqlite3.Connection, settings: Settings) -> int:
         (dest, first_snap))}
     fees = house_fees(settings.fees, "blackwater")
     vendor = _vendor_prices(conn)
+    tun = scorecard.calibrated(conn, settings.tuning)
 
     rows = []
     for source, buyer in (("alliance", "horde"), ("horde", "alliance")):
@@ -322,7 +333,7 @@ def analyse_exports(conn: sqlite3.Connection, settings: Settings) -> int:
             sig = export_signal(
                 levels, dest_ladders.get(variant_id, (0, [], []))[1], hist, dest_sold_price.get(variant_id),
                 buyer_prices.get(variant_id), buyer if buyer_tracked else None,
-                vendor.get(variant_id, (None, None))[0], bool(is_commodity), fees, settings.tuning)
+                vendor.get(variant_id, (None, None))[0], bool(is_commodity), fees, tun)
             if sig:
                 rows.append((
                     pinned[source], variant_id, sig.strategy, sig.buy_qty, sig.buy_max_price, sig.buy_cost,

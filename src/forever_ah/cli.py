@@ -36,6 +36,7 @@ def cmd_run(args) -> int:
         analyse.analyse_exports(conn, settings)
     if updated:   # new market data: score what has come due, then log what is recommended now
         scorecard.score(conn)
+        scorecard.recalibrate(conn, settings.tuning, collector.utcnow())   # takes effect from the next run
         scorecard.log_signals(conn, settings)
 
     dist_missing = not (settings.dist_path / "data" / "meta.json").exists()

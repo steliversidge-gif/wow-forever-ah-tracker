@@ -425,7 +425,7 @@ def test_scorecard_logs_once_a_day_and_scores_when_the_window_closes(tmp_path):
     s = scorecard.summary(conn)
     assert s["pending"] == 0
     assert s["rows"] == [{"strategy": "FLIP", "risk_level": "LOW", "checked": 1, "on_time": 1, "late": 0,
-                          "missed": 0, "enough_buyers": 1}]
+                          "missed": 0, "enough_buyers": 1, "net": 1}]
     conn.close()
 
 
@@ -639,3 +639,36 @@ def test_new_forever_recipes_carry_a_warning():
            'count="1" /></spell></createdBy></item></wowhead>')
     facts = parse_wowhead_facts(xml)
     assert facts["spell_id"] == 1247741 and facts["skill"] == 185
+
+
+def test_net_fill_subtracts_listings_posted_at_the_same_price():
+    from forever_ah.scorecard import net_fill
+    sold = '[[1000, 30]]'
+    assert net_fill(20, 1000, [("t1", 30, sold, None)]) == 1
+    # 15 units were posted at the price after us: they sold first, leaving 15 of the 30 sales for us
+    assert net_fill(20, 1000, [("t1", 30, sold, '[[990, 15]]')]) == 0
+    assert net_fill(15, 1000, [("t1", 30, sold, '[[990, 15]]')]) == 1
+    # listings above our price, or well below it, are not same-price competition
+    assert net_fill(20, 1000, [("t1", 30, sold, '[[1200, 50], [800, 50]]')]) == 1
+
+
+def test_scorecard_retunes_the_time_stretch_once_a_day(tmp_path):
+    from forever_ah import db, scorecard
+    from forever_ah.config import Tuning
+
+    conn = db.connect(tmp_path / "c.db")
+    tun = Tuning()
+    assert scorecard.calibrated(conn, tun).stretch_dip == 1.0
+    # 200 dips that sold, three in four of them within 1.44x the predicted 12 hours
+    for i in range(200):
+        hours = 12 * 1.44 if i % 4 else 24.0
+        conn.execute("INSERT INTO signal_log (house_id, sell_house_id, variant_id, strategy, issued_at, buy_qty, "
+                     "sell_price, days_to_sell, risk_level, outcome, hours_to_fill) VALUES (114, 114, ?, 'DIP', "
+                     "'2026-11-15 10:00:00', 1, 100, 0.5, 'LOW', 'LATE', ?)", (i, hours))
+    changed = scorecard.recalibrate(conn, tun, "2026-11-16 10:00:00")
+    assert changed["stretch_dip"] == 1.2                      # half-way (square root) towards 1.44
+    assert changed["stretch_flip"] == 1.5                     # too few flips to judge: left alone
+    assert scorecard.calibrated(conn, tun).stretch_dip == 1.2
+    assert scorecard.recalibrate(conn, tun, "2026-11-16 20:00:00") == {}      # only once a day
+    assert scorecard.calibrated(conn, Tuning(auto_stretch=False)).stretch_dip == 1.0
+    assert scorecard.summary(conn)["stretch"]["dip"] == 1.2

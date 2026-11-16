@@ -11,6 +11,7 @@ tallied into one small summary row per item per hourly snapshot.
   signals     buy/sell recommendations, rebuilt each run  } export reads
   signal_log  one row per recommendation when first made, scored later against
               what the market then did (the scorecard)
+  calibration values the scorecard re-tunes by itself (how far to stretch "sells in")
   rate_counts hourly tallies the sale / expiry / repost base rates are re-measured from
   item_facts  per item, from Wowhead: how it is obtained and, if crafted, its recipe
   item_daily  one row per item per day it sold, kept for months after the hourly
@@ -23,7 +24,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS houses (
@@ -148,7 +149,14 @@ CREATE TABLE IF NOT EXISTS signal_log (
     outcome       TEXT,                   -- NULL until scored: ON_TIME | LATE | MISSED
     filled_share  REAL,                   -- share of buy_qty the market took at the sell price
     any_price_ok  INTEGER,                -- 1 if at least buy_qty units sold at ANY price
-    hours_to_fill REAL
+    hours_to_fill REAL,
+    net_ok        INTEGER                 -- 1 if it still filled after subtracting listings posted at the same price later
+);
+
+CREATE TABLE IF NOT EXISTS calibration (
+    key        TEXT PRIMARY KEY,          -- e.g. stretch_flip: values the scorecard re-tunes
+    value      REAL NOT NULL,
+    updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_signal_log_key ON signal_log (house_id, variant_id, strategy, issued_at);
 
@@ -212,6 +220,7 @@ MIGRATIONS = {
     3: (),   # only a new table, which the schema script creates
     4: (),   # likewise: item_daily and house_daily
     5: ("ALTER TABLE item_facts ADD COLUMN spell_id INTEGER",),
+    6: ("ALTER TABLE signal_log ADD COLUMN net_ok INTEGER",),
 }
 
 

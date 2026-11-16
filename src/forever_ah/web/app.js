@@ -102,6 +102,12 @@ const RISK = {
   MEDIUM: ['warning', 'sq', 'Medium'], HIGH: ['critical', 'di', 'High'],
 };
 const RISK_RANK = { NONE: 0, LOW: 1, MEDIUM: 2, HIGH: 3 };
+// How trades of the same play and risk rating have done over the last few days (the strict, net-of-competition test).
+function trackRecord(s) {
+  const r = ((S.meta.scorecard || {}).rows || []).find(x => x.strategy === s.strategy && x.risk_level === s.risk_level);
+  if (!r || r.checked < 20) return '';
+  return `<span class="why" title="Of the last ${num(r.checked)} ${s.strategy} trades rated ${RISK[s.risk_level][2].toLowerCase()} risk, this share sold at the price even after other sellers posted at the same price">${pct(r.net / r.checked)} sold</span>`;
+}
 function riskBadge(level) {
   const [color, shape, label] = RISK[level] || RISK.HIGH;
   return `<span class="badge ${shape}"><i style="background:var(--${color})"></i>${label}</span>`;
@@ -134,7 +140,8 @@ async function viewBuy() {
       Blackwater instead; CRAFT rows are made from materials bought here (CRAFT · VENDOR rows are then sold
       to a vendor, not listed); DISENCHANT rows are gear worth more as
       enchanting materials. Risk reflects how fast the item sells, how much history backs the estimate,
-      and where the price is heading.</p>
+      and where the price is heading. The small figure under each risk rating is the track record: how often
+      trades of that play and rating actually sold at the price over the last few days.</p>
     <div class="filters">
       <label>Budget (gold)<input id="f-budget" type="number" min="0" step="1" placeholder="any" value="${esc(F.budget)}"></label>
       <label>Min profit (silver)<input id="f-profit" type="number" min="0" step="1" value="${esc(F.minProfit)}"></label>
@@ -192,7 +199,7 @@ async function viewBuy() {
         <td class="num">${buyCell(s)}</td><td class="num">${payCell(s)}</td>
         <td class="num">${money(s.buy_cost)}</td><td class="num">${sellCell(s)}</td>
         <td class="num"><b>${money(s.profit)}</b></td><td class="num">${pct(s.roi)}</td>
-        <td class="num">${sellsIn(s.days_to_sell)}</td><td>${riskBadge(s.risk_level)}</td></tr>`).join('')}
+        <td class="num">${sellsIn(s.days_to_sell)}</td><td>${riskBadge(s.risk_level)}${trackRecord(s)}</td></tr>`).join('')}
       </tbody></table></div>`;
   };
   const bind = (id, key) => $(id).addEventListener('input', e => { F[key] = e.target.value; draw(); });
@@ -554,7 +561,7 @@ async function viewCross() {
       <td class="num">${num(s.buy_qty)}</td><td class="num">${money(s.buy_max_price)}</td>
       <td class="num">${money(s.buy_cost)}</td><td class="num">${money(s.sell_price)}${s.list_hours ? `<span class="why">list ${s.list_hours}h</span>` : ''}</td>
       <td class="num"><b>${money(s.profit)}</b></td><td class="num">${pct(s.roi)}</td>
-      <td class="num">${sellsIn(s.days_to_sell)}</td><td>${riskBadge(s.risk_level)}</td></tr>`).join('')}</tbody></table></div>`
+      <td class="num">${sellsIn(s.days_to_sell)}</td><td>${riskBadge(s.risk_level)}${trackRecord(s)}</td></tr>`).join('')}</tbody></table></div>`
     : `<div class="note">${dest.n_snaps < 7
         ? `Still collecting: about 6 hours of Blackwater sales history are needed before these can be judged (${dest.n_snaps} hourly snapshot${dest.n_snaps === 1 ? '' : 's'} so far).`
         : 'No cross-faction trades clear the cut and deposit in the latest snapshot.'}</div>`}`;
@@ -617,7 +624,9 @@ function scorecardHtml(sc) {
     <p class="muted">Each recommendation is logged when first made, then checked against what the market did next.
       "Sold at the price" means at least the suggested quantity changed hands at the suggested sell price (within 3%).
       It is strict for flips: the play assumes you bought out the cheap listings, and if nobody did, buyers kept taking those.
-      "Enough buyers" is the looser test: that many units sold at any price.</p>`;
+      "Enough buyers" is the looser test: that many units sold at any price. "Sold, net of competition" is the strictest
+      and the one to trust: it subtracts listings other sellers posted at the same price afterwards, which sell before yours.
+      Covers the last ${sc && sc.days ? sc.days : 3} days.</p>`;
   if (!sc || !sc.rows.length) {
     return head + `<div class="note">Nothing scored yet${sc && sc.pending ? ` — ${num(sc.pending)} recommendation${sc.pending === 1 ? ' is' : 's are'} being watched` : ''}.
       A recommendation is scored once twice its predicted selling time has passed (at least 6 hours).</div>`;
@@ -625,11 +634,12 @@ function scorecardHtml(sc) {
   const share = (a, b) => b ? pct(a / b) : '–';
   return head + `<div class="table-wrap"><table><thead><tr><th>Play</th><th>Risk rating</th><th class="num">Checked</th>
     <th class="num">Sold at the price, on time</th><th class="num">Sold at the price, late</th><th class="num">Not sold at the price</th>
-    <th class="num">Enough buyers at any price</th></tr></thead><tbody>${sc.rows.map(r => `<tr><td>${esc(r.strategy)}</td>
+    <th class="num">Enough buyers at any price</th><th class="num">Sold, net of competition</th></tr></thead><tbody>${sc.rows.map(r => `<tr><td>${esc(r.strategy)}</td>
     <td>${riskBadge(r.risk_level)}</td><td class="num">${num(r.checked)}</td><td class="num">${share(r.on_time, r.checked)}</td>
     <td class="num">${share(r.late, r.checked)}</td><td class="num">${share(r.missed, r.checked)}</td>
-    <td class="num">${share(r.enough_buyers, r.checked)}</td></tr>`).join('')}</tbody></table></div>
-    <p class="muted">${num(sc.pending)} more being watched. Results older than ${sc.keep_days} days are dropped.</p>`;
+    <td class="num">${share(r.enough_buyers, r.checked)}</td><td class="num"><b>${share(r.net, r.checked)}</b></td></tr>`).join('')}</tbody></table></div>
+    <p class="muted">${num(sc.pending)} more being watched. Results older than ${sc.keep_days} days are dropped.
+      ${sc.stretch && Object.keys(sc.stretch).length ? `"Sells in" is currently stretched by: ${Object.entries(sc.stretch).map(([k, v]) => `${k} ×${v}`).join(', ')} (re-tuned daily from these results).` : ''}</p>`;
 }
 
 function ratesHtml(houses) {

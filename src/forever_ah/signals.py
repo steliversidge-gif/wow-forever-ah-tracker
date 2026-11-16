@@ -39,15 +39,13 @@ AT_PRICE = 0.97        # "at this price" means within 3% under it
 MIN_LEVEL_DAYS = 0.25  # price-level data is ignored until 6 hours of it exist
 SHORT_LISTING = 8      # hours; the fallback when a trade may need repricing
 
-# The scorecard's first day (12 Nov 2026, ~500 judged trades since the sales
-# fixes): a quarter of the flips and crafts that sold took 1.5x the predicted
-# time or longer, and exports 3x; dips sold on time. Predictions are stretched
-# to match, so "sells in" is a time most trades beat, not a coin toss.
+# "Sells in" is the raw estimate times a per-play stretch (Tuning.stretch_*), so
+# that it is a time three trades in four beat, not a coin toss. The scorecard
+# re-tunes the stretches daily from how late past trades ran.
+
 # Wowhead lists recipes found in the game files, including ones nobody can learn yet.
 NEW_RECIPE_NOTE = "Recipe is new in Forever: check you can actually learn it before buying materials"
 NEW_RECIPE_FROM = 1_000_000    # spell ids from here up were added for Forever
-
-TIME_STRETCH = {"FLIP": 1.5, "CRAFT": 1.5, "EXPORT": 2.0}
 
 
 @dataclass(frozen=True)
@@ -324,7 +322,7 @@ def _finish(strategy: str, qty: int, max_price: int, cost: int, target: int, day
             tun: Tuning, share: float | None = None, pressure: float = 0.0) -> Signal | None:
     # A deposit is refunded on sale and lost on expiry; charge the expected
     # number of expiries before the stock clears.
-    days *= TIME_STRETCH.get(strategy, 1.0)
+    days *= getattr(tun, f"stretch_{strategy.lower()}", 1.0)
     hours = choose_listing_hours(vendor, qty, is_commodity, fees, hist, pressure)
     lost_deposits = round(_deposit(vendor, qty, is_commodity, fees, hours) * expected_expiries(days, hours))
     profit = math.floor(qty * target * (1 - fees.cut)) - cost - lost_deposits
