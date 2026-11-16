@@ -105,7 +105,7 @@ const RISK_RANK = { NONE: 0, LOW: 1, MEDIUM: 2, HIGH: 3 };
 // How trades of the same play and risk rating have done over the last few days (the strict, net-of-competition test).
 function trackRecord(s) {
   const r = ((S.meta.scorecard || {}).rows || []).find(x => x.strategy === s.strategy && x.risk_level === s.risk_level);
-  if (!r || r.checked < 20) return '';
+  if (!r || r.checked < 20 || r.net == null) return '';
   return `<span class="why" title="Of the last ${num(r.checked)} ${s.strategy} trades rated ${RISK[s.risk_level][2].toLowerCase()} risk, this share sold at the price even after other sellers posted at the same price">${pct(r.net / r.checked)} sold</span>`;
 }
 function riskBadge(level) {
@@ -637,7 +637,7 @@ function scorecardHtml(sc) {
     <th class="num">Enough buyers at any price</th><th class="num">Sold, net of competition</th></tr></thead><tbody>${sc.rows.map(r => `<tr><td>${esc(r.strategy)}</td>
     <td>${riskBadge(r.risk_level)}</td><td class="num">${num(r.checked)}</td><td class="num">${share(r.on_time, r.checked)}</td>
     <td class="num">${share(r.late, r.checked)}</td><td class="num">${share(r.missed, r.checked)}</td>
-    <td class="num">${share(r.enough_buyers, r.checked)}</td><td class="num"><b>${share(r.net, r.checked)}</b></td></tr>`).join('')}</tbody></table></div>
+    <td class="num">${share(r.enough_buyers, r.checked)}</td><td class="num"><b>${r.net == null ? '–' : share(r.net, r.checked)}</b></td></tr>`).join('')}</tbody></table></div>
     <p class="muted">${num(sc.pending)} more being watched. Results older than ${sc.keep_days} days are dropped.
       ${sc.stretch && Object.keys(sc.stretch).length ? `"Sells in" is currently stretched by: ${Object.entries(sc.stretch).map(([k, v]) => `${k} ×${v}`).join(', ')} (re-tuned daily from these results).` : ''}</p>`;
 }

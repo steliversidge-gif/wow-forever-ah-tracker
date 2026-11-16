@@ -34,6 +34,8 @@ def cmd_run(args) -> int:
         analyse.analyse_house(conn, house_id, settings)
     if houses:
         analyse.analyse_exports(conn, settings)
+    if args.reanalyse and not updated:
+        scorecard.score(conn)     # a code change may have added a measure to fill in for past results
     if updated:   # new market data: score what has come due, then log what is recommended now
         scorecard.score(conn)
         scorecard.recalibrate(conn, settings.tuning, collector.utcnow())   # takes effect from the next run

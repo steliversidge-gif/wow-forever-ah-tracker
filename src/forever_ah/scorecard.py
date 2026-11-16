@@ -173,10 +173,11 @@ def summary(conn: sqlite3.Connection) -> dict:
     since = (_time(newest) - timedelta(days=SUMMARY_DAYS)).strftime(TIME_FMT) if newest else ""
     rows = [
         {"strategy": r[0], "risk_level": r[1], "checked": r[2], "on_time": r[3], "late": r[4],
-         "missed": r[5], "enough_buyers": r[6], "net": r[7] or 0}
+         "missed": r[5], "enough_buyers": r[6], "net": r[7]}
         for r in conn.execute(
             "SELECT strategy, risk_level, COUNT(*), SUM(outcome = 'ON_TIME'), SUM(outcome = 'LATE'), "
-            "SUM(outcome = 'MISSED'), SUM(any_price_ok), SUM(net_ok) FROM signal_log "
+            "SUM(outcome = 'MISSED'), SUM(any_price_ok), "
+            "CASE WHEN COUNT(net_ok) = COUNT(*) THEN SUM(net_ok) END FROM signal_log "
             "WHERE outcome IN ('ON_TIME', 'LATE', 'MISSED') AND issued_at >= ? GROUP BY strategy, risk_level "
             "ORDER BY strategy, risk_level", (since,))
     ]
