@@ -73,7 +73,7 @@ def parse_wowhead_facts(xml: str) -> dict | None:
         "name": name.group(1),
         "sources": [int(x) for x in sources.group(1).split(",") if x] if sources else [],
         "buy_price": int(buy.group(1)) if buy else None,
-        "skill": None, "spell_name": None, "makes": None, "reagents": None,
+        "skill": None, "spell_name": None, "spell_id": None, "makes": None, "reagents": None,
     }
     spell = re.search(r'<createdBy><spell id="(\d+)" name="([^"]*)"[^>]*?minCount="(\d+)" maxCount="(\d+)"[^>]*>(.*?)</spell>',
                       xml, re.S)
@@ -82,7 +82,7 @@ def parse_wowhead_facts(xml: str) -> dict | None:
                     re.findall(r'<reagent id="(\d+)" name="([^"]*)"[^>]*?count="(\d+)"', spell.group(5))]
         if reagents:
             skill = re.search(r'"s":(\d+),"t":6,"ti":' + spell.group(1), xml)
-            facts.update(spell_name=_unescape(spell.group(2)), makes=(int(spell.group(3)) + int(spell.group(4))) / 2,
+            facts.update(spell_id=int(spell.group(1)), spell_name=_unescape(spell.group(2)), makes=(int(spell.group(3)) + int(spell.group(4))) / 2,
                          reagents=[[i, c, _unescape(n)] for i, c, n in reagents],
                          skill=int(skill.group(1)) if skill else None)
     return facts

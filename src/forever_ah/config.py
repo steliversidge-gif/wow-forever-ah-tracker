@@ -57,6 +57,7 @@ class Settings:
     ruleset: int = 2
     locale: str = "en_GB"
     home_faction: str = "alliance"
+    unavailable_recipes: tuple[str, ...] = ()   # crafted items to leave out: their recipe cannot be learned
     houses: dict[str, int] = field(default_factory=lambda: {f: 0 for f in FACTIONS})
     fees: Fees = field(default_factory=Fees)
     tuning: Tuning = field(default_factory=Tuning)
@@ -99,6 +100,7 @@ def load_settings(root: Path | None = None) -> Settings:
         ruleset=int(raw.get("ruleset", 2)),
         locale=str(raw.get("locale", "en_GB")),
         home_faction=home,
+        unavailable_recipes=tuple(str(n).strip().lower() for n in raw.get("unavailable_recipes", [])),
         houses=houses,
         fees=_pick(Fees, raw.get("fees", {})),
         tuning=_pick(Tuning, raw.get("tuning", {})),

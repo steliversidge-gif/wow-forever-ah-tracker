@@ -623,3 +623,19 @@ def test_craft_and_vendor_buys_materials_while_each_craft_still_pays():
     assert stew.buy_qty == 20 and stew.buy_max_price == 540 and stew.risk_level == "LOW"
     assert craft_vendor_signal([("Tiger Meat", 1, None, None)], 600, 1.0, "Cooking", True, TUN) is None
     assert craft_vendor_signal([("Silk Cloth", 1, [(199, 5000)], None)], 200, 1.0, "First Aid", True, TUN) is None
+
+
+def test_new_forever_recipes_carry_a_warning():
+    from forever_ah.signals import NEW_RECIPE_NOTE, craft_vendor_signal
+    from forever_ah.blizzard import parse_wowhead_facts
+    fish = [("Raw Spinefin Halibut", 1, [(150, 50)], None)]
+    plain = craft_vendor_signal(fish, 200, 1.0, "Cooking", True, TUN)
+    new = craft_vendor_signal(fish, 200, 1.0, "Cooking", True, TUN, new_recipe=True)
+    assert plain.risk_level == "NONE" and NEW_RECIPE_NOTE not in plain.reasons
+    assert new.risk_level == "LOW" and NEW_RECIPE_NOTE in new.reasons
+    xml = ('<wowhead><item id="8957"><name><![CDATA[Spinefin Halibut]]></name><json><![CDATA["source":[1,5],'
+           '"sourcemore":[{"s":185,"t":6,"ti":1247741}]]]></json><createdBy><spell id="1247741" name="Spinefin Halibut" '
+           'icon="x" minCount="1" maxCount="1"><reagent id="8959" name="Raw Spinefin Halibut" quality="1" icon="x" '
+           'count="1" /></spell></createdBy></item></wowhead>')
+    facts = parse_wowhead_facts(xml)
+    assert facts["spell_id"] == 1247741 and facts["skill"] == 185

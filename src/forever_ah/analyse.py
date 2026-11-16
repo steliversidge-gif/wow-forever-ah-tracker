@@ -14,6 +14,7 @@ from forever_ah.professions import COOLDOWN_DAYS, PROFESSIONS, VENDOR_ONLY, dise
 from forever_ah.signals import (
     build_history,
     craft_signal,
+    NEW_RECIPE_FROM,
     craft_vendor_signal,
     disenchant_signal,
     evaluate,
@@ -158,7 +159,14 @@ def analyse_house(conn: sqlite3.Connection, house_id: int, settings: Settings) -
         if not bonus:
             base_variant[item_id] = variant_id
     facts = {r[0]: r[1:] for r in conn.execute(
-        "SELECT item_id, name, sources, buy_price, skill, makes, reagents FROM item_facts WHERE ok = 1")}
+        "SELECT item_id, name, sources, buy_price, skill, makes, reagents, spell_id FROM item_facts WHERE ok = 1")}
+    barred = set(settings.unavailable_recipes)
+
+    def learnable(f) -> bool:
+        return (f[0] or "").lower() not in barred
+
+    def is_new(f) -> bool:
+        return bool(f[6]) and f[6] >= NEW_RECIPE_FROM
 
     def unit_price(item_id: int) -> tuple[int | None, bool]:
         """(what one unit costs to obtain, bought from a vendor). Vendor-only goods cost their
@@ -191,7 +199,7 @@ def analyse_house(conn: sqlite3.Connection, house_id: int, settings: Settings) -
     def craft(variant_id: int, levels: list, hist, is_commodity: bool):
         item_id = item_of.get(variant_id, (None,))[0]
         f = facts.get(item_id)
-        if not f or not f[5] or base_variant.get(item_id) != variant_id:
+        if not f or not f[5] or base_variant.get(item_id) != variant_id or not learnable(f):
             return None
         materials = []
         for reagent_id, count, name in json.loads(f[5]):
@@ -201,7 +209,7 @@ def analyse_house(conn: sqlite3.Connection, house_id: int, settings: Settings) -
             materials.append((name, count, price, from_vendor))
         return craft_signal(levels, hist, materials, f[4], PROFESSIONS.get(f[3]),
                             vendor.get(variant_id, (None, None))[0], is_commodity, fees, tun,
-                            COOLDOWN_DAYS.get(item_id))
+                            COOLDOWN_DAYS.get(item_id), is_new(f))
 
     def keep(variant_id: int, sig) -> None:
         signal_rows.append((
@@ -246,7 +254,7 @@ def analyse_house(conn: sqlite3.Connection, house_id: int, settings: Settings) -
     for item_id, f in facts.items() if makes_things else ():
         variant_id = base_variant.get(item_id)
         vendor_price, source = vendor.get(variant_id, (None, None))
-        if not f[5] or not vendor_price or item_id in COOLDOWN_DAYS:
+        if not f[5] or not vendor_price or item_id in COOLDOWN_DAYS or not learnable(f):
             continue
         materials = []
         for reagent_id, count, name in json.loads(f[5]):
@@ -255,7 +263,7 @@ def analyse_house(conn: sqlite3.Connection, house_id: int, settings: Settings) -
             materials.append((name, count, None if from_vendor else book[1] if book else None,
                               price if from_vendor else None))
         sig = craft_vendor_signal(materials, vendor_price, f[4], PROFESSIONS.get(f[3]),
-                                  bool(source and "forever" in source), tun)
+                                  bool(source and "forever" in source), tun, is_new(f))
         if sig:
             keep(variant_id, sig)
 

@@ -23,7 +23,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS houses (
@@ -175,7 +175,8 @@ CREATE TABLE IF NOT EXISTS item_facts (
     makes      REAL,                      -- average units per craft
     reagents   TEXT,                      -- JSON [[item id, count, name], ...]
     fetched_at TEXT NOT NULL,
-    ok         INTEGER NOT NULL           -- 0 when Wowhead had nothing; retried after a day
+    ok         INTEGER NOT NULL,          -- 0 when Wowhead had nothing; retried after a day
+    spell_id   INTEGER                    -- the recipe's spell id; 1,000,000+ means it is new in Forever
 );
 
 CREATE TABLE IF NOT EXISTS item_daily (
@@ -210,6 +211,7 @@ MIGRATIONS = {
     ),
     3: (),   # only a new table, which the schema script creates
     4: (),   # likewise: item_daily and house_daily
+    5: ("ALTER TABLE item_facts ADD COLUMN spell_id INTEGER",),
 }
 
 

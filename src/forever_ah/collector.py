@@ -271,7 +271,9 @@ def resolve_facts(conn: sqlite3.Connection, client: BlizzardClient, limit: int =
         seen = known.get(item_id)
         return seen is None or (not seen[0] and seen[1] < retry_before)
 
-    todo: list[int] = []
+    # Recipes fetched before spell ids were recorded are read again, first.
+    todo: list[int] = [r[0] for r in conn.execute(
+        "SELECT item_id FROM item_facts WHERE reagents IS NOT NULL AND spell_id IS NULL ORDER BY item_id")]
     for (reagents,) in conn.execute("SELECT reagents FROM item_facts WHERE reagents IS NOT NULL"):
         todo.extend(r[0] for r in json.loads(reagents) if due(r[0]))
     todo.extend(r[0] for r in conn.execute(
@@ -294,11 +296,20 @@ def resolve_facts(conn: sqlite3.Connection, client: BlizzardClient, limit: int =
             continue
         refused = 0
         f = parse_wowhead_facts(xml) or {}
+        if not f.get("reagents") and conn.execute(
+                "SELECT 1 FROM item_facts WHERE item_id = ? AND reagents IS NOT NULL", (item_id,)).fetchone():
+            # A re-read that comes back without the recipe we already hold: keep what we have.
+            conn.execute("UPDATE item_facts SET spell_id = 0 WHERE item_id = ?", (item_id,))
+            done += 1
+            time.sleep(pause)
+            continue
         conn.execute(
-            "INSERT OR REPLACE INTO item_facts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO item_facts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (item_id, f.get("name"), json.dumps(f["sources"]) if f.get("sources") else None, f.get("buy_price"),
              f.get("skill"), f.get("spell_name"), f.get("makes"),
-             json.dumps(f["reagents"]) if f.get("reagents") else None, now, int(bool(f))))
+             json.dumps(f["reagents"]) if f.get("reagents") else None, now, int(bool(f)),
+             # 0 = looked, found no id: stops a recipe Wowhead has dropped being re-read every run
+             f.get("spell_id") or 0))
         done += 1
         time.sleep(pause)
     conn.commit()

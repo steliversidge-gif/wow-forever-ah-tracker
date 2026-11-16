@@ -43,6 +43,10 @@ SHORT_LISTING = 8      # hours; the fallback when a trade may need repricing
 # fixes): a quarter of the flips and crafts that sold took 1.5x the predicted
 # time or longer, and exports 3x; dips sold on time. Predictions are stretched
 # to match, so "sells in" is a time most trades beat, not a coin toss.
+# Wowhead lists recipes found in the game files, including ones nobody can learn yet.
+NEW_RECIPE_NOTE = "Recipe is new in Forever: check you can actually learn it before buying materials"
+NEW_RECIPE_FROM = 1_000_000    # spell ids from here up were added for Forever
+
 TIME_STRETCH = {"FLIP": 1.5, "CRAFT": 1.5, "EXPORT": 2.0}
 
 
@@ -482,7 +486,8 @@ def export_signal(levels: list[Level], dest_levels: list[Level], dest_hist: Hist
 
 def craft_signal(levels: list[Level], hist: History, materials: list[tuple[str, int, int, bool]],
                  makes: float, profession: str | None, vendor: int | None, is_commodity: bool,
-                 fees: HouseFees, tun: Tuning, cooldown_days: int | None = None) -> Signal | None:
+                 fees: HouseFees, tun: Tuning, cooldown_days: int | None = None,
+                 new_recipe: bool = False) -> Signal | None:
     """Make the item and list it. materials: (name, count per craft, unit price, bought from a vendor).
 
     `levels` is the crafted item's own order book (may be empty). The buy
@@ -514,11 +519,14 @@ def craft_signal(levels: list[Level], hist: History, materials: list[tuple[str, 
     if cooldown_days:
         every = "day" if cooldown_days == 1 else f"{cooldown_days} days"
         notes.append(f"Cooldown in the original game: one per character every {every}, so this is for one craft")
+    if new_recipe:
+        notes.append(NEW_RECIPE_NOTE)
     return replace(sig, reasons=notes + sig.reasons)
 
 
 def craft_vendor_signal(materials: list[tuple[str, int, list[Level] | None, int | None]], vendor_each: int,
-                        makes: float, profession: str | None, verified: bool, tun: Tuning) -> Signal | None:
+                        makes: float, profession: str | None, verified: bool, tun: Tuning,
+                        new_recipe: bool = False) -> Signal | None:
     """Buy materials, craft, and sell the result to an NPC vendor.
 
     materials: (name, count per craft, this house's order book or None, vendor
@@ -582,8 +590,11 @@ def craft_vendor_signal(materials: list[tuple[str, int, list[Level] | None, int 
                f"Sell the result to any NPC vendor for {format_money(vendor_each)} each: no auction needed"]
     if not verified:
         reasons.append("Vendor price is from Classic data: check the tooltip first")
+    if new_recipe:
+        reasons.append(NEW_RECIPE_NOTE)
+    score = (0 if verified else 10) + (20 if new_recipe else 0)
     return Signal("CRAFTVEND", max(1, int(crafts * makes)), math.ceil(last / makes), cost, vendor_each, profit,
-                  round(profit / cost, 4), 0.0, 0 if verified else 10, "NONE" if verified else "LOW", reasons)
+                  round(profit / cost, 4), 0.0, score, "NONE" if score == 0 else "LOW", reasons)
 
 
 def disenchant_signal(levels: list[Level], materials: list[tuple[str, float, int | None]],

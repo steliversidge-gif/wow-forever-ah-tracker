@@ -6,6 +6,10 @@ ruleset = 2          # 1 = PvP, 2 = Normal, 3 = Roleplay, 15 = Roleplay PvP
 locale = "en_GB"
 home_faction = "horde"   # the house the dashboard opens on: alliance, horde or blackwater
 
+# Crafted items to leave out of the CRAFT plays because their recipe cannot be learned in
+# game (Wowhead lists recipes that are in the game files but not obtainable). Item names.
+unavailable_recipes = ["Spinefin Halibut"]
+
 # Which auction house is yours, per faction. Blizzard's API lists every house for
 # every ruleset without saying which is which, so you confirm it once by comparing
 # prices in game (see the Status page of the dashboard).

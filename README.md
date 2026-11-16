@@ -166,6 +166,10 @@ After changing `config.toml` locally, use `forever-ah run --reanalyse`.
 
 ## Known limits
 
+- **Some recipes cannot be learned.** Wowhead lists every recipe in the game files,
+  including ones no trainer or drop gives yet (cooked Spinefin Halibut, for example). Crafts
+  whose recipe is new in Forever carry a warning; ones you have confirmed are unobtainable
+  go in `unavailable_recipes` in `config.toml`.
 - **Recipes and item sources arrive slowly.** They are looked up on Wowhead one item at a
   time, about 120 an hour, most-traded first, because Wowhead blocks faster reading. The
   Craft play and the Farm page fill in over the first two to three days. Wowhead is
