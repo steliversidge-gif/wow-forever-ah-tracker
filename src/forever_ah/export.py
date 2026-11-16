@@ -107,7 +107,7 @@ def export_house(conn: sqlite3.Connection, house_id: int, data_dir: Path, settin
     for s in signals:   # which profession the trade needs, for the "my professions" filter
         skill = s.pop("skill")
         s["profession"] = ("Enchanting" if s["strategy"] == "DISENCHANT"
-                           else PROFESSIONS.get(skill, "Other") if s["strategy"] == "CRAFT" else None)
+                           else PROFESSIONS.get(skill, "Other") if s["strategy"] in ("CRAFT", "CRAFTVEND") else None)
     _write(data_dir / f"house-{house_id}.json",
            {"signals": signals, "market": {"cols": MARKET_COLS, "rows": [list(r) for r in market]}})
 

@@ -14,6 +14,7 @@ from forever_ah.professions import COOLDOWN_DAYS, PROFESSIONS, VENDOR_ONLY, dise
 from forever_ah.signals import (
     build_history,
     craft_signal,
+    craft_vendor_signal,
     disenchant_signal,
     evaluate,
     export_signal,
@@ -240,6 +241,23 @@ def analyse_house(conn: sqlite3.Connection, house_id: int, settings: Settings) -
                 levels, [(material_name(m), units, sale_value(m)) for m, units in breaks_into], fees, tun)
             if sig:
                 keep(variant_id, sig)
+
+    # Materials cheaper than what a vendor pays for the thing they make: craft it and vendor it.
+    for item_id, f in facts.items() if makes_things else ():
+        variant_id = base_variant.get(item_id)
+        vendor_price, source = vendor.get(variant_id, (None, None))
+        if not f[5] or not vendor_price or item_id in COOLDOWN_DAYS:
+            continue
+        materials = []
+        for reagent_id, count, name in json.loads(f[5]):
+            price, from_vendor = unit_price(reagent_id)
+            book = ladders.get(base_variant.get(reagent_id))
+            materials.append((name, count, None if from_vendor else book[1] if book else None,
+                              price if from_vendor else None))
+        sig = craft_vendor_signal(materials, vendor_price, f[4], PROFESSIONS.get(f[3]),
+                                  bool(source and "forever" in source), tun)
+        if sig:
+            keep(variant_id, sig)
 
     # Craftable items with a sales history here but nothing listed right now: an open goal.
     for item_id in facts if makes_things else ():

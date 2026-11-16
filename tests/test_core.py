@@ -604,3 +604,22 @@ def test_hour_profile_measures_the_daily_cycle():
     profile = hour_profile(points)
     assert profile[3] == 0.1 and profile[20] == -0.1
     assert hour_profile(points[:30]) is None          # one full day is not enough
+
+
+def test_craft_and_vendor_buys_materials_while_each_craft_still_pays():
+    from forever_ah.signals import craft_vendor_signal
+    silk = [(157, 40), (180, 60), (195, 100), (199, 5000)]
+    # Silk Bandage: 1 Silk Cloth, vendors for 2s. A 5% return rules out silk above 1s 90c.
+    sig = craft_vendor_signal([("Silk Cloth", 1, silk, None)], 200, 1.0, "First Aid", True, TUN)
+    assert sig.strategy == "CRAFTVEND" and sig.buy_qty == 100 and sig.buy_max_price == 180
+    assert sig.buy_cost == 40 * 157 + 60 * 180 and sig.profit == 100 * 200 - sig.buy_cost
+    assert sig.risk_level == "NONE" and sig.list_hours is None and sig.days_to_sell == 0
+    assert sig.reasons[0] == "First Aid: 1x Silk Cloth (up to 1s 80c)"
+    # Heavy Silk Bandage: 2 Silk Cloth, vendors for 4s - the same floor, two cloth at a time
+    heavy = craft_vendor_signal([("Silk Cloth", 2, silk, None)], 400, 1.0, "First Aid", True, TUN)
+    assert heavy.buy_qty == 50 and heavy.buy_cost == sig.buy_cost
+    # a vendor-bought material is a fixed cost; a material with no listings rules the recipe out
+    stew = craft_vendor_signal([("Tiger Meat", 1, [(300, 10), (500, 10)], None), ("Spices", 1, None, 40)], 600, 1.0, "Cooking", False, TUN)
+    assert stew.buy_qty == 20 and stew.buy_max_price == 540 and stew.risk_level == "LOW"
+    assert craft_vendor_signal([("Tiger Meat", 1, None, None)], 600, 1.0, "Cooking", True, TUN) is None
+    assert craft_vendor_signal([("Silk Cloth", 1, [(199, 5000)], None)], 200, 1.0, "First Aid", True, TUN) is None

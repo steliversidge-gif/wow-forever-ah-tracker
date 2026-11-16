@@ -12,6 +12,9 @@ DIP     The whole market is well below its typical price. Buy the cheap units
         and relist near typical. Slower and riskier: it needs the price to recover.
 CRAFT   Buy the materials, make the item, list it. Priced at the cheapest
         current listing (or the typical price when none is listed).
+CRAFTVEND   Materials listed for less than a vendor pays for what they make
+            (Silk Cloth under 2s makes a Silk Bandage that vendors for 2s).
+            Buy them, craft, vendor the result: no auction and no market risk.
 DISENCHANT  Gear listed for less than the enchanting materials it breaks into.
         Buy it, disenchant it, sell the materials.
 EXPORT  Buy in a faction house and list on the neutral Blackwater house, where
@@ -512,6 +515,75 @@ def craft_signal(levels: list[Level], hist: History, materials: list[tuple[str, 
         every = "day" if cooldown_days == 1 else f"{cooldown_days} days"
         notes.append(f"Cooldown in the original game: one per character every {every}, so this is for one craft")
     return replace(sig, reasons=notes + sig.reasons)
+
+
+def craft_vendor_signal(materials: list[tuple[str, int, list[Level] | None, int | None]], vendor_each: int,
+                        makes: float, profession: str | None, verified: bool, tun: Tuning) -> Signal | None:
+    """Buy materials, craft, and sell the result to an NPC vendor.
+
+    materials: (name, count per craft, this house's order book or None, vendor
+    price or None when it is bought from a vendor). Crafts are added one at a
+    time, each taking the cheapest materials left, until the next one would no
+    longer clear the minimum return. The buy columns describe the materials:
+    quantity = units to make, price = the most one unit's materials may cost.
+    """
+    if not materials or not makes or not vendor_each:
+        return None
+    value = vendor_each * makes                       # what one craft's output vendors for
+    books = []                                        # [levels, index, units left at that level, dearest price paid]
+    fixed = 0
+    for _, count, levels, vendor_price in materials:
+        if vendor_price is not None:
+            fixed += count * vendor_price
+            books.append(None)
+        elif levels:
+            books.append([levels, 0, levels[0][1], 0])
+        else:
+            return None
+    crafts = cost = last = 0
+    while crafts < tun.craft_vendor_max:
+        marginal, takes = fixed, []
+        for (_, count, _, _), book in zip(materials, books):
+            if book is None:
+                continue
+            levels, i, left, _ = book
+            need, spent, top = count, 0, 0
+            while need:
+                if i >= len(levels):
+                    break
+                take = min(need, left)
+                spent += take * levels[i][0]
+                top = levels[i][0]
+                need -= take
+                left -= take
+                if left == 0:
+                    i += 1
+                    left = levels[i][1] if i < len(levels) else 0
+            if need:
+                marginal = None                       # this material has run out
+                break
+            marginal += spent
+            takes.append((book, i, left, top))
+        if marginal is None or marginal * (1 + tun.min_roi) > value:
+            break
+        for book, i, left, top in takes:
+            book[1], book[2], book[3] = i, left, max(book[3], top)
+        crafts += 1
+        cost += marginal
+        last = marginal
+    profit = math.floor(value * crafts) - cost
+    if crafts == 0 or profit < tun.min_profit:
+        return None
+    parts = ", ".join(
+        f"{count}x {name} ({format_money(vendor_price)} at a vendor)" if book is None
+        else f"{count}x {name} (up to {format_money(book[3])})"
+        for (name, count, _, vendor_price), book in zip(materials, books))
+    reasons = [f"{profession or 'Crafted'}: {parts}" + (f" makes {makes:g}" if makes != 1 else ""),
+               f"Sell the result to any NPC vendor for {format_money(vendor_each)} each: no auction needed"]
+    if not verified:
+        reasons.append("Vendor price is from Classic data: check the tooltip first")
+    return Signal("CRAFTVEND", max(1, int(crafts * makes)), math.ceil(last / makes), cost, vendor_each, profit,
+                  round(profit / cost, 4), 0.0, 0 if verified else 10, "NONE" if verified else "LOW", reasons)
 
 
 def disenchant_signal(levels: list[Level], materials: list[tuple[str, float, int | None]],

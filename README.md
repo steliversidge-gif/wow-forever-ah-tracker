@@ -18,7 +18,7 @@ Pages. No server, no home PC left on, nothing to pay for.
 | **Cross-faction** | Every EXPORT trade in both directions: buy in one faction's house, list on Blackwater for the other faction. |
 | **Status** | Collector health, the scorecard (did past recommendations work?), when things sell by hour of day, the measured base rates, and the one-off "which house is mine?" setup. |
 
-### The six plays
+### The seven plays
 
 - **VENDOR** – listed below what an NPC vendor pays. Buy it, vendor it. No market risk.
 - **FLIP** – the cheapest listings sit well under the next price up. Buy them, relist at
@@ -33,6 +33,10 @@ Pages. No server, no home PC left on, nothing to pay for.
   Recipes come from Wowhead's Forever database; materials are priced at this house's market
   price, or the vendor price for everyday vendor-only supplies. The "Buy" and "Pay up to"
   columns show how many to make and the material cost of each.
+- **CRAFT · VENDOR** – materials listed for less than a vendor pays for what they make.
+  Silk Cloth under 2s, for example, makes a Silk Bandage that vendors for 2s. Buy the
+  cheap materials, craft, vendor the result: no auction, no cut and no market risk. This
+  is also the floor under those materials' prices.
 - **DISENCHANT** – gear listed for less than the enchanting materials it breaks into (with
   a 20% margin). Needs an enchanter. Items made by enchanters (wands, for example) are
   left out: Forever does not let you disenchant them. It uses the original game's disenchant table, which

@@ -111,13 +111,17 @@ const PLAY = {
   EXPORT: 'Buy here, list on Blackwater for the other faction',
   CRAFT: 'Buy the materials, make it, list it',
   DISENCHANT: 'Buy it, disenchant it, sell the materials',
+  CRAFTVEND: 'Buy the materials, make it, sell it to a vendor',
 };
+const PLAY_LABEL = { CRAFTVEND: 'CRAFT · VENDOR' };
+const isCraft = s => s.strategy === 'CRAFT' || s.strategy === 'CRAFTVEND';
 const G = { q: '', how: '', sort: 'gold', minPrice: '', cat: '' };                                  // farm filters
 const sellCell = s => money(s.sell_price) + (s.strategy === 'VENDOR' ? ''
+  : s.strategy === 'CRAFTVEND' ? '<span class="why">to a vendor</span>'
   : s.strategy === 'DISENCHANT' ? '<span class="why">in materials</span>' : `<span class="why">${
   [s.strategy === 'EXPORT' ? 'on Blackwater' : '', s.list_hours ? `list ${s.list_hours}h` : ''].filter(Boolean).join(' · ')}</span>`);
-const buyCell = s => num(s.buy_qty) + (s.strategy === 'CRAFT' ? '<span class="why">to make</span>' : '');
-const payCell = s => money(s.buy_max_price) + (s.strategy === 'CRAFT' ? '<span class="why">materials each</span>' : '');
+const buyCell = s => num(s.buy_qty) + (isCraft(s) ? '<span class="why">to make</span>' : '');
+const payCell = s => money(s.buy_max_price) + (isCraft(s) ? '<span class="why">materials each</span>' : '');
 
 // ---------------------------------------------------------------- buy list --
 async function viewBuy() {
@@ -127,7 +131,8 @@ async function viewBuy() {
     <h1>Buy list — ${esc(houseLabel(h))}</h1>
     <p class="lead">Each row is one trade: what to buy in this auction house, the most to pay per unit,
       what to relist it for, and the profit after the house cut. EXPORT rows are bought here and listed on
-      Blackwater instead; CRAFT rows are made from materials bought here; DISENCHANT rows are gear worth more as
+      Blackwater instead; CRAFT rows are made from materials bought here (CRAFT · VENDOR rows are then sold
+      to a vendor, not listed); DISENCHANT rows are gear worth more as
       enchanting materials. Risk reflects how fast the item sells, how much history backs the estimate,
       and where the price is heading.</p>
     <div class="filters">
@@ -138,7 +143,8 @@ async function viewBuy() {
         <option value="LOW">Low or none</option><option value="NONE">None (vendor only)</option></select></label>
       <label>Play<select id="f-play"><option value="">All</option><option value="VENDOR">Vendor</option>
         <option value="FLIP">Flip</option><option value="DIP">Dip</option><option value="EXPORT">Export</option>
-        <option value="CRAFT">Craft</option><option value="DISENCHANT">Disenchant</option></select></label>
+        <option value="CRAFT">Craft</option><option value="CRAFTVEND">Craft and vendor</option>
+        <option value="DISENCHANT">Disenchant</option></select></label>
       <label>Sort by<select id="f-sort"><option value="profit">Profit</option><option value="roi">Return</option>
         <option value="risk">Lowest risk</option><option value="speed">Fastest sale</option></select></label>
       ${catSelect('f-cat')}
@@ -182,7 +188,7 @@ async function viewBuy() {
         <th class="num">Return</th><th class="num">Sells in</th><th>Risk</th></tr></thead>
       <tbody>${rows.map(s => `<tr>
         <td class="item">${itemLink(s)}<span class="why">${esc(s.reasons.join(' · '))}</span></td>
-        <td><span class="play" title="${esc(PLAY[s.strategy])}">${s.strategy}</span></td>
+        <td><span class="play" title="${esc(PLAY[s.strategy])}">${PLAY_LABEL[s.strategy] || s.strategy}</span></td>
         <td class="num">${buyCell(s)}</td><td class="num">${payCell(s)}</td>
         <td class="num">${money(s.buy_cost)}</td><td class="num">${sellCell(s)}</td>
         <td class="num"><b>${money(s.profit)}</b></td><td class="num">${pct(s.roi)}</td>
@@ -333,11 +339,11 @@ async function viewItem(variantId) {
       · <a href="https://www.wowhead.com/forever/item=${x.item_id}" target="_blank" rel="noopener">Wowhead</a>
       · ${esc(houseLabel(h))}</p>
     ${sigs.map(s => `<div class="advice">
-      <p>${s.strategy === 'CRAFT'
+      <p>${isCraft(s)
           ? `<b>Make ${num(s.buy_qty)}</b> for about <b>${money(s.buy_max_price)}</b> each in materials (${money(s.buy_cost)} in total).`
           : `<b>Buy ${num(s.buy_qty)}</b> at up to <b>${money(s.buy_max_price)}</b> each (${money(s.buy_cost)} in total).`}
         ${s.strategy === 'DISENCHANT' ? `Disenchant them: each gives about <b>${money(s.sell_price)}</b> of materials on average.` :
-          s.strategy === 'VENDOR' ? `Sell to a vendor for <b>${money(s.sell_price)}</b> each.`
+          s.strategy === 'VENDOR' || s.strategy === 'CRAFTVEND' ? `Sell to a vendor for <b>${money(s.sell_price)}</b> each.`
           : s.strategy === 'EXPORT' ? `List on the Blackwater house at <b>${money(s.sell_price)}</b> each${s.list_hours ? ` for ${s.list_hours}h` : ''}.`
           : `Relist at <b>${money(s.sell_price)}</b> each${s.list_hours ? ` for ${s.list_hours}h` : ''}.`}
         Expected profit <b>${money(s.profit)}</b> (${pct(s.roi)}) after fees.</p>
