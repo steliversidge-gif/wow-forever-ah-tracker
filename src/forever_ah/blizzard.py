@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import json
 import logging
+import csv
+import io
 import re
 import time
 from datetime import UTC
@@ -26,6 +28,10 @@ log = logging.getLogger(__name__)
 TOKEN_URL = "https://oauth.battle.net/token"
 TIMEOUT = (10, 180)
 WOWHEAD_ITEM_URL = "https://www.wowhead.com/forever/item={item_id}&xml"
+# wago.tools publishes the game client's data tables for every build; "wowf" is WoW: Forever.
+WAGO_BUILDS_URL = "https://wago.tools/api/builds"
+WAGO_TABLE_URL = "https://wago.tools/db2/{table}/csv?build={build}"
+WAGO_PRODUCT = "wowf"
 
 # Wowhead's category names, mapped onto the ones Blizzard's API uses.
 WOWHEAD_CLASSES = {
@@ -74,7 +80,15 @@ def parse_wowhead_facts(xml: str) -> dict | None:
         "sources": [int(x) for x in sources.group(1).split(",") if x] if sources else [],
         "buy_price": int(buy.group(1)) if buy else None,
         "skill": None, "spell_name": None, "spell_id": None, "makes": None, "reagents": None,
+        "teaches_spell": None, "req_rank": None, "req_spec": None,
     }
+    # A recipe item (Plans, Pattern, Formula...): the recipe it teaches and what learning it takes.
+    teaches = re.search(r'spell=(\d+)[^"]*">Teaches', xml)
+    if teaches:
+        rank = re.search(r'"reqskillrank":(\d+)', xml)
+        spec = re.search(r'Requires <a [^>]*spells/professions[^>]*>([^<]+)</a>', xml)
+        facts.update(teaches_spell=int(teaches.group(1)), req_rank=int(rank.group(1)) if rank else None,
+                     req_spec=_unescape(spec.group(1)) if spec else None)
     spell = re.search(r'<createdBy><spell id="(\d+)" name="([^"]*)"[^>]*?minCount="(\d+)" maxCount="(\d+)"[^>]*>(.*?)</spell>',
                       xml, re.S)
     if spell:
@@ -91,6 +105,25 @@ def parse_wowhead_facts(xml: str) -> dict | None:
 def _unescape(text: str) -> str:
     return (text.replace("&quot;", '"').replace("&apos;", "'").replace("&#39;", "'")
             .replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&"))
+
+
+def forever_skill_abilities() -> tuple[str, list[dict]] | None:
+    """(client build, rows of the SkillLineAbility table) for the newest WoW: Forever build, or None.
+
+    The table lists every profession recipe with its skill line and the skill
+    levels at which it turns yellow and grey. Unofficial but datamined straight
+    from the game client, so it includes Forever's own recipes.
+    """
+    headers = {"User-Agent": "forever-ah-tracker"}
+    try:
+        builds = requests.get(WAGO_BUILDS_URL, timeout=30, headers=headers).json()[WAGO_PRODUCT]
+        build = max(builds, key=lambda b: b["created_at"])["version"]
+        r = requests.get(WAGO_TABLE_URL.format(table="SkillLineAbility", build=build), timeout=90, headers=headers)
+        r.raise_for_status()
+    except (requests.RequestException, ValueError, KeyError, TypeError) as exc:
+        log.warning("Could not read Forever's recipe data from wago.tools: %s", exc)
+        return None
+    return build, list(csv.DictReader(io.StringIO(r.text)))
 
 
 class BlizzardError(RuntimeError):

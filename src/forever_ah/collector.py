@@ -9,7 +9,14 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 
-from forever_ah.blizzard import WOWHEAD_CLASSES, BlizzardClient, http_date_to_utc, parse_wowhead_facts
+from forever_ah.blizzard import (
+    WOWHEAD_CLASSES,
+    BlizzardClient,
+    forever_skill_abilities,
+    http_date_to_utc,
+    parse_wowhead_facts,
+)
+from forever_ah.professions import PROFESSIONS
 from forever_ah.lifecycle import RateCounts, Rates, rates_from_counts
 from forever_ah.pricing import squash_levels
 from forever_ah.config import FACTIONS, Settings
@@ -271,9 +278,13 @@ def resolve_facts(conn: sqlite3.Connection, client: BlizzardClient, limit: int =
         seen = known.get(item_id)
         return seen is None or (not seen[0] and seen[1] < retry_before)
 
-    # Recipes fetched before spell ids were recorded are read again, first.
+    # Read again, first: recipes fetched before spell ids were recorded, and recipe items
+    # fetched before what they teach was recorded.
     todo: list[int] = [r[0] for r in conn.execute(
         "SELECT item_id FROM item_facts WHERE reagents IS NOT NULL AND spell_id IS NULL ORDER BY item_id")]
+    todo.extend(r[0] for r in conn.execute(
+        "SELECT f.item_id FROM item_facts f JOIN items i ON i.item_id = f.item_id "
+        "WHERE i.item_class = 'Recipe' AND f.ok = 1 AND f.teaches_spell IS NULL ORDER BY f.item_id"))
     for (reagents,) in conn.execute("SELECT reagents FROM item_facts WHERE reagents IS NOT NULL"):
         todo.extend(r[0] for r in json.loads(reagents) if due(r[0]))
     todo.extend(r[0] for r in conn.execute(
@@ -304,12 +315,12 @@ def resolve_facts(conn: sqlite3.Connection, client: BlizzardClient, limit: int =
             time.sleep(pause)
             continue
         conn.execute(
-            "INSERT OR REPLACE INTO item_facts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO item_facts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (item_id, f.get("name"), json.dumps(f["sources"]) if f.get("sources") else None, f.get("buy_price"),
              f.get("skill"), f.get("spell_name"), f.get("makes"),
              json.dumps(f["reagents"]) if f.get("reagents") else None, now, int(bool(f)),
              # 0 = looked, found no id: stops a recipe Wowhead has dropped being re-read every run
-             f.get("spell_id") or 0))
+             f.get("spell_id") or 0, f.get("teaches_spell") or 0, f.get("req_rank"), f.get("req_spec")))
         done += 1
         time.sleep(pause)
     conn.commit()
@@ -343,6 +354,38 @@ def roll_up_days(conn: sqlite3.Connection) -> int:
             f"FROM item_stats WHERE snapshot_id IN ({marks}) GROUP BY house_id", (day, *snaps))
     conn.commit()
     return len(todo)
+
+
+def resolve_recipe_skills(conn: sqlite3.Connection) -> int:
+    """Refresh each recipe's profession and skill colours from Forever's client data, once a day.
+
+    Keeps the previous copy if the source is unreachable or returns something implausible.
+    """
+    last = conn.execute("SELECT MAX(fetched_at) FROM recipe_skills").fetchone()[0]
+    if last and last > (datetime.now(UTC) - timedelta(days=1)).strftime(TIME_FMT):
+        return 0
+    got = forever_skill_abilities()
+    if not got:
+        return 0
+    build, rows = got
+    now = utcnow()
+    keep = []
+    for r in rows:
+        try:
+            line, spell = int(r["SkillLine"]), int(r["Spell"])
+            if line in PROFESSIONS:
+                keep.append((spell, line, int(r["TrivialSkillLineRankLow"]) or None,
+                             int(r["TrivialSkillLineRankHigh"]) or None, build, now))
+        except (KeyError, ValueError):
+            continue
+    if len(keep) < 1000:   # the table has about 2,600 profession recipes: anything far short is a bad download
+        log.warning("Forever recipe data looked incomplete (%d recipes); keeping the previous copy", len(keep))
+        return 0
+    conn.execute("DELETE FROM recipe_skills")
+    conn.executemany("INSERT OR REPLACE INTO recipe_skills VALUES (?, ?, ?, ?, ?, ?)", keep)
+    conn.commit()
+    log.info("Recipe skill levels refreshed from Forever build %s: %d recipes", build, len(keep))
+    return len(keep)
 
 
 def prune(conn: sqlite3.Connection, settings: Settings) -> None:

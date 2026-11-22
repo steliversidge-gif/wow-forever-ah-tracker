@@ -97,3 +97,23 @@ details { margin: 8px 0; } summary { cursor: pointer; color: var(--text-2); font
 .chips > span:first-child { font-weight: 600; }
 .chips label { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
 .chips .muted { font-size: 12px; flex-basis: 100%; }
+
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin: 0 0 12px; }
+.seg button { background: transparent; color: var(--text-2); border: 0; padding: 7px 14px; font: inherit; cursor: pointer; }
+.seg button + button { border-left: 1px solid var(--border); }
+.seg button[aria-selected="true"] { background: var(--surface-2); color: var(--text); font-weight: 600; }
+.seg.small { margin: 0; align-self: end; } .seg.small button { padding: 5px 10px; font-size: 13px; }
+.profile { border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; margin: 0 0 14px; }
+.profile summary { font-size: 14px; color: var(--text); }
+.profile-body { display: grid; gap: 10px; margin-top: 10px; }
+.profile fieldset { border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; margin: 0; display: grid; gap: 8px; }
+.profile legend { font-weight: 600; font-size: 13px; padding: 0 4px; }
+.radios { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; }
+.radios label, .filters label.inline, .known-only { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; font-size: 13px; }
+.filters label.inline { flex-direction: row; align-self: end; padding-bottom: 6px; }
+.slider { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--text-2); }
+.slider input[type=range] { width: min(320px, 60vw); }
+.slider output { font-variant-numeric: tabular-nums; font-weight: 600; color: var(--text); min-width: 3ch; }
+.sk { font-size: 11px; font-weight: 700; padding: 1px 5px; border-radius: 4px; border: 1px solid currentColor; }
+.sk-orange { color: #d4661c; } .sk-yellow { color: #a68a00; } .sk-green { color: #2f9e44; } .sk-grey { color: var(--text-3); }
+.sk-cannot { color: var(--text-3); text-decoration: line-through; }

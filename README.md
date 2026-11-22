@@ -13,6 +13,7 @@ Pages. No server, no home PC left on, nothing to pay for.
 |---|---|
 | **Buy list** | One row per trade: how many to buy, the most to pay, what to sell each for, profit after the house cut, how long it should take to sell, and a risk rating with the reasons behind it. Filter by budget, minimum profit, risk, play, auction house category and your own professions. A note says whether now is the cheap or the dear part of the day. |
 | **Market** | Every listed item with its cheapest price, typical price, trend, estimated sales per day and days of stock. Filter by category, or show only shortages (selling fast, little stock) or gluts (days of stock, falling price). |
+| **Professions** | Two views. **Overview**: every profession's profitable recipes, potential profit a day, best recipes, cooldowns, track record and the value of what gathering professions bring in. **Recipes by profession**: every recipe of one profession with its skill requirement and colour against your skill, how it is learned (and what the recipe costs here), materials cost, sale price, profit each and a day, and an "I know this" tick. Your profile (Primary and Secondary profession, a 0–300 skill each, specialisation, known recipes) is remembered in your browser and also filters the Buy list's crafts. Mining shows whether to smelt or sell the ore. |
 | **Farm** | Items you can go and get (herbs, ore, skins, fish, drops), ranked by how much gold the market pays out for them a day, with days of stock on sale. No buying involved. |
 | **Item page** | Price history and estimated sales by the hour, the item's usual price at each hour of the day, a day-by-day view, and the order book with the running cost of buying it out. |
 | **Cross-faction** | Every EXPORT trade in both directions: buy in one faction's house, list on Blackwater for the other faction. |
@@ -172,6 +173,11 @@ After changing `config.toml` locally, use `forever-ah run --reanalyse`.
 
 ## Known limits
 
+- **Skill requirements are partly estimated.** Forever's client data (read daily from
+  wago.tools) gives every recipe's yellow and grey levels. The exact skill to learn a recipe
+  is only known when a recipe item (Plans, Pattern...) teaches it; for trainer recipes it is
+  estimated as yellow minus 20, which was within about 20 points on a sample of 40. Such
+  figures show with "≈". Specialisations are only known from recipe items too.
 - **Some recipes cannot be learned.** Wowhead lists every recipe in the game files,
   including ones no trainer or drop gives yet (cooked Spinefin Halibut, for example). Crafts
   whose recipe is new in Forever carry a warning; ones you have confirmed are unobtainable

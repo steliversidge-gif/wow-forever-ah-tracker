@@ -17,11 +17,34 @@ const inCat = (cls, cat) => !cat || (CATS[cat] || []).includes(cls);
 const catSelect = id => `<label>Category<select id="${id}"><option value="">All</option>${
   Object.keys(CATS).map(c => `<option>${c}</option>`).join('')}</select></label>`;
 
-// "My professions": remembered in this browser only.
-const PROFS = { mine: new Set() };
-try { PROFS.mine = new Set(JSON.parse(localStorage.getItem('fah-professions') || '[]')); } catch { /* private window */ }
-function saveProfs() {
-  try { localStorage.setItem('fah-professions', JSON.stringify([...PROFS.mine])); } catch { /* not remembered */ }
+// Your professions: two slots (Primary, Secondary), each a profession, a skill level and a
+// specialisation, plus the recipes you have ticked as known. Remembered in this browser only.
+const PROFILE = { slots: [{ prof: '', skill: 300, spec: '' }, { prof: '', skill: 300, spec: '' }],
+  known: [], onlyKnown: false, view: 'overview', focus: '' };
+try { Object.assign(PROFILE, JSON.parse(localStorage.getItem('fah-profile') || '{}')); } catch { /* private window */ }
+PROFILE.knownSet = new Set(PROFILE.known);
+function saveProfile() {
+  const { knownSet, ...rest } = PROFILE;
+  try { localStorage.setItem('fah-profile', JSON.stringify({ ...rest, known: [...knownSet] })); } catch { /* not remembered */ }
+}
+const hasProfile = () => PROFILE.slots.some(s => s.prof);
+const slotFor = prof => PROFILE.slots.find(s => s.prof && s.prof === prof);
+// Whether your profile can make a recipe: right profession, enough skill, the specialisation, and
+// (if you asked for it) ticked as known.
+function canMake(prof, need, spec, spell) {
+  const slot = slotFor(prof);
+  if (!slot) return false;
+  if (need != null && slot.skill < need) return false;
+  if (spec && slot.spec && slot.spec !== spec) return false;
+  if (PROFILE.onlyKnown && spell != null && !PROFILE.knownSet.has(spell)) return false;
+  return true;
+}
+// Buy list rows that need a profession: shown only if your profile covers them (or no profile is set).
+function profileAllows(s) {
+  if (!hasProfile()) return true;
+  if (s.strategy === 'DISENCHANT') return !!slotFor('Enchanting');
+  if (s.strategy === 'CRAFT' || s.strategy === 'CRAFTVEND') return canMake(s.profession, s.need, s.spec, s.spell);
+  return true;
 }
 // The house's daily price cycle (24 UTC values, share above or below the day's average) in local hours.
 function localCycle(utc) {
@@ -132,7 +155,6 @@ const payCell = s => money(s.buy_max_price) + (isCraft(s) ? '<span class="why">m
 // ---------------------------------------------------------------- buy list --
 async function viewBuy() {
   const h = houseMeta(S.houseId), d = await loadHouse(S.houseId);
-  const profs = [...new Set(d.signals.map(s => s.profession).filter(Boolean))].sort();
   view.innerHTML = `
     <h1>Buy list — ${esc(houseLabel(h))}</h1>
     <p class="lead">Each row is one trade: what to buy in this auction house, the most to pay per unit,
@@ -157,9 +179,9 @@ async function viewBuy() {
       ${catSelect('f-cat')}
       <label>Search<input id="f-q" type="search" placeholder="item name" value="${esc(F.q)}"></label>
     </div>
-    ${profs.length ? `<div class="chips" id="f-profs"><span>My professions</span>${profs.map(pr => `<label>
-      <input type="checkbox" value="${esc(pr)}"${PROFS.mine.has(pr) ? ' checked' : ''}>${esc(pr)}</label>`).join('')}
-      <span class="muted">Tick yours to hide crafts (and disenchants) you cannot do. Nothing ticked shows everything.</span></div>` : ''}
+    <p class="chips"><span>Your professions:</span> ${esc(profileSummary())}
+      <a href="#/professions">${hasProfile() ? 'Change' : 'Set them'}</a>
+      <span class="muted">${hasProfile() ? 'Crafts and disenchants are limited to what you can make.' : 'Set them to see only crafts you can make.'}</span></p>
     ${cycleNote(h.price_by_hour)}
     <div id="buy-out"></div>`;
   $('#f-risk').value = F.risk; $('#f-play').value = F.play; $('#f-sort').value = F.sort; $('#f-cat').value = F.cat;
@@ -170,7 +192,7 @@ async function viewBuy() {
     let rows = d.signals.filter(s => s.buy_cost <= budget && s.profit >= minProfit
       && RISK_RANK[s.risk_level] <= RISK_RANK[F.risk] && (!F.play || s.strategy === F.play)
       && inCat(s.item_class, F.cat)
-      && (!s.profession || !PROFS.mine.size || PROFS.mine.has(s.profession))
+      && profileAllows(s)
       && (!q || s.name.toLowerCase().includes(q)));
     const sorters = {
       profit: (a, b) => b.profit - a.profit, roi: (a, b) => b.roi - a.roi,
@@ -195,7 +217,8 @@ async function viewBuy() {
         <th class="num">Return</th><th class="num">Sells in</th><th>Risk</th></tr></thead>
       <tbody>${rows.map(s => `<tr>
         <td class="item">${itemLink(s)}<span class="why">${esc(s.reasons.join(' · '))}</span></td>
-        <td><span class="play" title="${esc(PLAY[s.strategy])}">${PLAY_LABEL[s.strategy] || s.strategy}</span></td>
+        <td><span class="play" title="${esc(PLAY[s.strategy])}">${PLAY_LABEL[s.strategy] || s.strategy}</span>${isCraft(s) && s.profession
+          ? `<span class="why">${esc(s.profession)}${s.need != null ? ` ${s.exact ? '' : '≈'}${s.need}` : ''}${s.spec ? ` · ${esc(s.spec)}` : ''}</span>` : ''}</td>
         <td class="num">${buyCell(s)}</td><td class="num">${payCell(s)}</td>
         <td class="num">${money(s.buy_cost)}</td><td class="num">${sellCell(s)}</td>
         <td class="num"><b>${money(s.profit)}</b></td><td class="num">${pct(s.roi)}</td>
@@ -205,12 +228,6 @@ async function viewBuy() {
   const bind = (id, key) => $(id).addEventListener('input', e => { F[key] = e.target.value; draw(); });
   bind('#f-budget', 'budget'); bind('#f-profit', 'minProfit'); bind('#f-risk', 'risk');
   bind('#f-play', 'play'); bind('#f-sort', 'sort'); bind('#f-q', 'q'); bind('#f-cat', 'cat');
-  if (profs.length) {
-    $('#f-profs').addEventListener('change', e => {
-      if (e.target.checked) PROFS.mine.add(e.target.value); else PROFS.mine.delete(e.target.value);
-      saveProfs(); draw();
-    });
-  }
   draw();
 }
 
@@ -531,6 +548,226 @@ function barChart(el, t, values, label, when) {
   });
 }
 
+// ------------------------------------------------------------- professions --
+// Overview of every profession, or one profession recipe by recipe, judged against your profile.
+const ALL_PROFS = ['Alchemy', 'Blacksmithing', 'Enchanting', 'Engineering', 'Leatherworking', 'Tailoring',
+  'Mining', 'Herbalism', 'Skinning', 'Cooking', 'First Aid', 'Fishing'];
+const GATHER_PROFS = ['Mining', 'Herbalism', 'Skinning', 'Fishing'];
+const SLOT_NAMES = ['Primary', 'Secondary'];
+const P = { q: '', sort: 'day', can: true, profitable: true };   // recipe list filters
+const DAY_CAP = 20;   // "profit a day" assumes you sell at most this many a day, or one craft per cooldown
+
+// The best place to sell one unit: the auction house (after the cut) or a vendor.
+function outlet(x) {
+  const ah = x.net, vend = x.vnet;
+  if (ah == null && vend == null) return null;
+  return vend != null && (ah == null || vend > ah) ? { each: vend, where: 'vendor', price: x.vend } : { each: ah, where: 'ah', price: x.sell };
+}
+function perDay(x) {
+  const o = outlet(x);
+  if (!o) return null;
+  if (x.cd) return o.each * x.mk / x.cd;
+  return o.each * (o.where === 'vendor' ? DAY_CAP : Math.min(x.spd || 0, DAY_CAP));
+}
+// Recipe colour against a skill, as the game shows it.
+function skillColour(x, skill) {
+  if (skill == null) return null;
+  if (x.need != null && skill < x.need) return ['cannot', 'Not yet: needs more skill'];
+  if (x.y == null || x.g == null) return null;
+  const green = Math.floor((x.y + x.g) / 2);
+  if (skill < x.y) return ['orange', 'Orange: a skill point every craft'];
+  if (skill < green) return ['yellow', 'Yellow: usually a skill point'];
+  if (skill < x.g) return ['green', 'Green: sometimes a skill point'];
+  return ['grey', 'Grey: no more skill points'];
+}
+const skillCell = (x, slot) => {
+  const c = skillColour(x, slot ? slot.skill : null);
+  return `${x.need == null ? '–' : (x.ex ? '' : '≈') + x.need}${c ? ` <span class="sk sk-${c[0]}" title="${esc(c[1])}">${c[0] === 'cannot' ? 'too low' : c[0]}</span>` : ''}`;
+};
+
+function profileSummary() {
+  const parts = PROFILE.slots.filter(s => s.prof).map(s => `${s.prof} ${s.skill}${s.spec && s.spec !== 'none' ? ` (${s.spec})` : ''}`);
+  return parts.length ? parts.join(' · ') + (PROFILE.onlyKnown ? ' · known recipes only' : '') : 'not set';
+}
+function profileHtml(specs) {
+  return `<details class="profile"${hasProfile() ? '' : ' open'}><summary><b>Your professions:</b> ${esc(profileSummary())}</summary>
+    <div class="profile-body">${PROFILE.slots.map((slot, i) => `<fieldset data-slot="${i}"><legend>${SLOT_NAMES[i]}</legend>
+      <div class="radios">${['', ...ALL_PROFS].map(pr => `<label><input type="radio" name="prof${i}" value="${esc(pr)}"${slot.prof === pr ? ' checked' : ''}>${pr || 'None'}</label>`).join('')}</div>
+      <label class="slider">Skill <input type="range" min="0" max="300" step="1" value="${slot.skill}" data-k="skill"><output>${slot.skill}</output></label>
+      ${(specs[slot.prof] || []).length ? `<label class="slider">Specialisation <select data-k="spec">
+        <option value="">Don't filter</option><option value="none">None</option>
+        ${specs[slot.prof].map(sp => `<option${slot.spec === sp ? ' selected' : ''}>${esc(sp)}</option>`).join('')}</select></label>` : ''}
+    </fieldset>`).join('')}
+    <label class="known-only"><input type="checkbox" id="only-known"${PROFILE.onlyKnown ? ' checked' : ''}> Only recipes I've ticked as known
+      <span class="muted">(${num(PROFILE.knownSet.size)} ticked)</span></label>
+    <p class="muted">Remembered in this browser. The Buy list uses it too: its CRAFT rows show only what you can make.</p></div></details>`;
+}
+function bindProfile(root, onChange) {
+  root.querySelectorAll('fieldset').forEach(fs => {
+    const slot = PROFILE.slots[Number(fs.dataset.slot)];
+    fs.addEventListener('input', e => {
+      const t = e.target;
+      if (t.type === 'radio') { slot.prof = t.value; slot.spec = ''; }
+      else if (t.dataset.k === 'skill') { slot.skill = Number(t.value); t.nextElementSibling.value = t.value; }
+      else if (t.dataset.k === 'spec') slot.spec = t.value;
+      saveProfile();
+      // A new profession changes which specialisations apply: redraw the whole page.
+      onChange(t.type === 'radio');
+    });
+  });
+  const ok = $('#only-known', root);
+  if (ok) ok.addEventListener('change', e => { PROFILE.onlyKnown = e.target.checked; saveProfile(); onChange(false); });
+}
+
+async function viewProfessions() {
+  const h = houseMeta(S.houseId);
+  if (h.faction === 'blackwater') {
+    view.innerHTML = `<h1>Professions</h1><div class="note">Crafting is judged in the faction houses: Blackwater's
+      prices are too thin to value materials by. Pick your faction's house at the top right.</div>`;
+    return;
+  }
+  const d = await getJSON(`data/recipes-${S.houseId}.json`);
+  view.innerHTML = `
+    <h1>Professions — ${esc(houseLabel(h))}</h1>
+    <p class="lead">What each profession can earn in this house right now, and recipe by recipe what is worth making
+      at your skill. Materials are priced at this house's market price (or the vendor price for everyday supplies);
+      products at the lower of the cheapest listing and the typical price, after the ${pct(d.cut)} cut.</p>
+    <div class="seg" role="tablist">
+      <button type="button" data-v="overview" role="tab">Overview</button>
+      <button type="button" data-v="detail" role="tab">Recipes by profession</button></div>
+    <div id="pr-profile">${profileHtml(d.specs)}</div>
+    <div id="pr-out"></div>`;
+  const redraw = full => { if (full) { viewProfessions(); return; } draw(); $('#pr-profile summary').innerHTML = `<b>Your professions:</b> ${esc(profileSummary())}`; };
+  bindProfile($('#pr-profile'), redraw);
+  const tabs = view.querySelectorAll('.seg button');
+  tabs.forEach(b => b.addEventListener('click', () => { PROFILE.view = b.dataset.v; saveProfile(); draw(); }));
+
+  const draw = () => {
+    tabs.forEach(b => b.setAttribute('aria-selected', String(b.dataset.v === PROFILE.view)));
+    if (PROFILE.view === 'detail') drawDetail(d); else drawOverview(d);
+  };
+  draw();
+}
+
+function drawOverview(d) {
+  const rows = ALL_PROFS.map(prof => {
+    const list = d.recipes.filter(x => x.p === prof && outlet(x));
+    const slot = slotFor(prof);
+    const yours = slot ? list.filter(x => canMake(x.p, x.need, x.sp, x.s)) : null;
+    const paying = list.filter(x => outlet(x).each > 0 && (perDay(x) || 0) > 0).sort((a, b) => perDay(b) - perDay(a));
+    const rec = d.records[prof];
+    const gather = (d.gather[prof] || []);
+    return {
+      prof, slot, priced: list.length, paying, rec,
+      yoursPaying: yours ? yours.filter(x => outlet(x).each > 0 && (perDay(x) || 0) > 0).length : null,
+      top: paying.slice(0, 10).reduce((a, x) => a + perDay(x), 0),
+      cds: paying.filter(x => x.cd),
+      gold: gather.reduce((a, x) => a + x[2] * x[3], 0), gather,
+    };
+  }).sort((a, b) => (b.top - a.top) || (b.gold - a.gold));
+  $('#pr-out').innerHTML = `
+    <div class="table-wrap"><table><thead><tr><th>Profession</th><th class="num">Recipes priced</th>
+      <th class="num">Profitable now</th><th class="num">Top ten, profit a day</th><th>Best right now</th><th>Cooldowns</th>
+      <th class="num">Track record</th><th class="num">Gathered goods traded a day</th></tr></thead>
+    <tbody>${rows.map(r => `<tr>
+      <td><a href="#/professions" data-prof="${esc(r.prof)}"><b>${esc(r.prof)}</b></a>${r.slot ? `<span class="why">yours, skill ${r.slot.skill}${r.yoursPaying != null ? ` · ${r.yoursPaying} profitable you can make` : ''}</span>` : ''}</td>
+      <td class="num">${r.priced || '–'}</td><td class="num">${r.priced ? r.paying.length : '–'}</td>
+      <td class="num">${r.top ? money(r.top) : '–'}</td>
+      <td class="item">${r.paying.slice(0, 3).map(x => `${esc(x.n)} <span class="muted">(${money(perDay(x))}/day)</span>`).join('<br>') || '–'}</td>
+      <td class="item">${r.cds.map(x => `${esc(x.n)} <span class="muted">(${money(outlet(x).each * x.mk)} every ${x.cd} day${x.cd === 1 ? '' : 's'})</span>`).join('<br>') || '–'}</td>
+      <td class="num">${r.rec && r.rec[0] >= 10 ? `<span title="${r.rec[1]} of ${r.rec[0]} recommended crafts sold at the price, net of competition, over ${d.record_days} days">${pct(r.rec[1] / r.rec[0])}</span>` : '–'}</td>
+      <td class="num">${r.gold ? money(r.gold) : '–'}</td></tr>`).join('')}</tbody></table></div>
+    <p class="muted">"Profit a day" assumes you sell up to ${DAY_CAP} a day (fewer if fewer sell) or make one per cooldown,
+      and leaves out listing deposits and your time. Track record: how often this profession's recommended crafts actually
+      sold at the price over the last ${d.record_days} days, after other sellers' listings at the same price. Click a
+      profession for its recipes.</p>`;
+  $('#pr-out').querySelectorAll('a[data-prof]').forEach(a => a.addEventListener('click', e => {
+    e.preventDefault(); PROFILE.focus = a.dataset.prof; PROFILE.view = 'detail'; saveProfile(); viewProfessions();
+  }));
+}
+
+function drawDetail(d) {
+  const mine = PROFILE.slots.filter(s => s.prof).map(s => s.prof);
+  if (!PROFILE.focus) PROFILE.focus = mine[0] || 'Blacksmithing';
+  const prof = PROFILE.focus, slot = slotFor(prof), gather = d.gather[prof] || [];
+  const others = ALL_PROFS.filter(p => !mine.includes(p));
+  $('#pr-out').innerHTML = `
+    <div class="filters">
+      ${mine.length ? `<div class="seg small">${[...new Set(mine)].map(p => `<button type="button" data-f="${esc(p)}" aria-selected="${p === prof}">${esc(p)}</button>`).join('')}</div>` : ''}
+      <label>${mine.length ? 'Another profession' : 'Profession'}<select id="pr-other"><option value="">${mine.length ? 'Choose…' : ''}</option>
+        ${others.map(p => `<option${p === prof ? ' selected' : ''}>${esc(p)}</option>`).join('')}</select></label>
+      <label>Search<input id="pr-q" type="search" placeholder="recipe or material" value="${esc(P.q)}"></label>
+      <label>Sort by<select id="pr-sort"><option value="day">Profit a day</option><option value="each">Profit each</option>
+        <option value="need">Skill needed</option><option value="name">Name</option></select></label>
+      ${slot ? `<label class="inline"><input type="checkbox" id="pr-can"${P.can ? ' checked' : ''}> Only what I can make</label>` : ''}
+      <label class="inline"><input type="checkbox" id="pr-prof"${P.profitable ? ' checked' : ''}> Profitable only</label>
+    </div>
+    ${prof === 'Mining' ? `<div class="note"><b>Smelt or sell?</b> For smelting, "profit each" is what a bar earns over
+      selling the ore it took. Positive: smelt. Negative or nothing: sell the ore.</div>` : ''}
+    ${!slot ? `<p class="muted">${esc(prof)} is not in your profile, so recipes are not filtered by skill. Set it as Primary or Secondary above to see what you can make.</p>` : ''}
+    <div id="pr-list"></div>
+    ${gather.length ? `<h2>What ${esc(prof.toLowerCase())} gathers, by gold traded a day</h2>
+      <div class="table-wrap"><table><thead><tr><th>Item</th><th class="num">Price</th><th class="num">Sold / day</th>
+        <th class="num">Gold traded / day</th><th class="num">Days of stock</th></tr></thead><tbody>${gather.map(g => `<tr>
+        <td class="item"><a href="#/item/${g[0]}">${esc(g[1])}</a></td><td class="num">${money(g[2])}</td><td class="num">${num(g[3], 1)}</td>
+        <td class="num">${money(g[2] * g[3])}</td><td class="num">${g[3] ? num(g[4] / g[3], 1) : '–'}</td></tr>`).join('')}</tbody></table></div>` : ''}`;
+  $('#pr-sort').value = P.sort;
+  const list = () => {
+    const q = P.q.trim().toLowerCase();
+    let rows = d.recipes.filter(x => x.p === prof
+      && (!q || x.n.toLowerCase().includes(q) || x.mats.some(m => m[0].toLowerCase().includes(q)))
+      && (!P.profitable || (outlet(x) && outlet(x).each > 0))
+      && (!slot || !P.can || canMake(x.p, x.need, x.sp, x.s)));
+    const val = (x, f) => f(x) ?? -Infinity;
+    const sorters = {
+      day: (a, b) => val(b, perDay) - val(a, perDay), each: (a, b) => val(b, x => outlet(x)?.each) - val(a, x => outlet(x)?.each),
+      need: (a, b) => (b.need ?? 0) - (a.need ?? 0), name: (a, b) => a.n.localeCompare(b.n),
+    };
+    rows.sort(sorters[P.sort]);
+    const total = rows.length; rows = rows.slice(0, 300);
+    $('#pr-list').innerHTML = total ? `<p class="muted">${num(total)} recipe${total === 1 ? '' : 's'}${total > 300 ? ' (showing 300)' : ''}.
+      Skill "≈" is estimated (no recipe item states it; usually within 20 points).</p>
+      <div class="table-wrap"><table><thead><tr><th title="Tick the recipes you know">Known</th><th>Recipe</th><th class="num">Skill</th>
+        <th>Learned from</th><th class="num">Materials each</th><th class="num">Sells for</th><th class="num">Profit each</th>
+        <th class="num">Sold / day</th><th class="num">Listed</th><th class="num">Profit a day</th><th class="num">Track record</th></tr></thead>
+      <tbody>${rows.map(x => {
+        const o = outlet(x), day = perDay(x);
+        const tags = [x.cd ? `cooldown ${x.cd} day${x.cd === 1 ? '' : 's'}` : '', x.sp ? `needs ${x.sp}` : '', x.new ? 'new in Forever: check you can learn it' : '',
+          x.mk !== 1 ? `makes ${num(x.mk, 1)}` : ''].filter(Boolean);
+        return `<tr>
+        <td><input type="checkbox" data-spell="${x.s}"${PROFILE.knownSet.has(x.s) ? ' checked' : ''} aria-label="I know ${esc(x.n)}"></td>
+        <td class="item">${x.v ? `<a class="${qClass(x.q)}" href="#/item/${x.v}">${esc(x.n)}</a>` : esc(x.n)}
+          <span class="why">${esc(x.mats.map(m => `${m[1]}x ${m[0]} (${m[2] == null ? 'not listed' : money(m[2]) + (m[3] ? ' at a vendor' : '')})`).join(', '))}</span>
+          ${tags.length ? `<span class="why">${esc(tags.join(' · '))}</span>` : ''}</td>
+        <td class="num">${skillCell(x, slot)}</td>
+        <td>${x.learn ? `${esc(x.learn.n || 'Recipe item')}<span class="why">${x.learn.p ? money(x.learn.p) + ' here' : 'not on sale here'}</span>`
+          : `<span title="No recipe item for it has been seen: usually a trainer teaches it">Trainer?</span>`}</td>
+        <td class="num">${money(x.cost)}</td>
+        <td class="num">${o ? money(o.price) + (o.where === 'vendor' ? '<span class="why">to a vendor</span>' : '') : '–'}</td>
+        <td class="num"><b>${o ? money(o.each) : '–'}</b></td>
+        <td class="num">${num(x.spd, 1)}</td><td class="num">${num(x.lst)}</td>
+        <td class="num">${day == null ? '–' : money(day)}</td>
+        <td class="num">${x.rec ? `<span title="Recommended ${x.rec[0]} times in ${d.record_days} days; sold at the price, net of competition, ${x.rec[1]} times">${x.rec[1]} of ${x.rec[0]}</span>` : '–'}</td></tr>`;
+      }).join('')}</tbody></table></div>`
+      : `<div class="note">No ${esc(prof)} recipes match these filters.${slot && P.can ? ' Try unticking "Only what I can make", or raise your skill above.' : ''}</div>`;
+    $('#pr-list').querySelectorAll('input[data-spell]').forEach(cb => cb.addEventListener('change', () => {
+      const spell = Number(cb.dataset.spell);
+      if (cb.checked) PROFILE.knownSet.add(spell); else PROFILE.knownSet.delete(spell);
+      saveProfile();
+      const counter = $('#pr-profile .known-only .muted');
+      if (counter) counter.textContent = `(${num(PROFILE.knownSet.size)} ticked)`;
+      if (PROFILE.onlyKnown) list();
+    }));
+  };
+  $('#pr-out').querySelectorAll('button[data-f]').forEach(b => b.addEventListener('click', () => { PROFILE.focus = b.dataset.f; saveProfile(); drawDetail(d); }));
+  $('#pr-other').addEventListener('change', e => { if (e.target.value) { PROFILE.focus = e.target.value; saveProfile(); drawDetail(d); } });
+  $('#pr-q').addEventListener('input', e => { P.q = e.target.value; list(); });
+  $('#pr-sort').addEventListener('input', e => { P.sort = e.target.value; list(); });
+  $('#pr-prof').addEventListener('change', e => { P.profitable = e.target.checked; list(); });
+  if (slot) $('#pr-can').addEventListener('change', e => { P.can = e.target.checked; list(); });
+  list();
+}
+
 // ----------------------------------------------------------- cross-faction --
 // Every EXPORT trade, both directions: buy in one faction's house, list on
 // Blackwater for the other faction to buy.
@@ -722,6 +959,7 @@ async function render() {
     else if (route === 'item') await viewItem(Number(arg));
     else if (route === 'cross') await viewCross();
     else if (route === 'farm') await viewFarm();
+    else if (route === 'professions') await viewProfessions();
     else if (route === 'status') viewStatus();
     else await viewBuy();
   } catch (err) {

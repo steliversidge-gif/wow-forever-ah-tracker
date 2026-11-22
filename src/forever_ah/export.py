@@ -19,6 +19,7 @@ from pathlib import Path
 from forever_ah import scorecard
 from forever_ah.collector import measured_rates, tracked_houses, utcnow
 from forever_ah.config import Settings
+from forever_ah import recipes
 from forever_ah.professions import PROFESSIONS, how_obtained, is_farmable
 
 log = logging.getLogger(__name__)
@@ -96,7 +97,7 @@ def export_house(conn: sqlite3.Connection, house_id: int, data_dir: Path, settin
     signals = [
         {**dict(r), "reasons": json.loads(r["reasons"])}
         for r in conn.execute(
-            f"SELECT s.variant_id, v.item_id, {NAME_SQL} AS name, i.quality, i.item_class, f.skill, s.strategy, s.buy_qty, "
+            f"SELECT s.variant_id, v.item_id, {NAME_SQL} AS name, i.quality, i.item_class, f.skill, f.spell_id, s.strategy, s.buy_qty, "
             "s.buy_max_price, s.buy_cost, s.sell_price, s.profit, s.roi, s.days_to_sell, s.risk_score, "
             "s.risk_level, s.reasons, s.list_hours, ROUND(m.sold_per_day, 2) AS sold_per_day, m.ref_price "
             "FROM signals s JOIN variants v ON v.variant_id = s.variant_id "
@@ -104,10 +105,17 @@ def export_house(conn: sqlite3.Connection, house_id: int, data_dir: Path, settin
             "LEFT JOIN market m ON m.house_id = s.house_id AND m.variant_id = s.variant_id "
             "WHERE s.house_id = ? ORDER BY s.profit DESC", (house_id,))
     ]
-    for s in signals:   # which profession the trade needs, for the "my professions" filter
-        skill = s.pop("skill")
-        s["profession"] = ("Enchanting" if s["strategy"] == "DISENCHANT"
-                           else PROFESSIONS.get(skill, "Other") if s["strategy"] in ("CRAFT", "CRAFTVEND") else None)
+    reqs = recipes.requirements(conn)
+    for s in signals:   # which profession and skill the trade needs, for the profession filters
+        skill, spell = s.pop("skill"), s.pop("spell_id")
+        s["profession"] = "Enchanting" if s["strategy"] == "DISENCHANT" else None
+        if s["strategy"] in ("CRAFT", "CRAFTVEND"):
+            req = reqs.get(spell or -1)
+            s["profession"] = PROFESSIONS.get(req.skill_line if req and req.skill_line else skill, "Other")
+            s.update(spell=spell, need=req.need if req else None, exact=int(bool(req and req.exact)),
+                     spec=req.spec if req else None)
+    if conn.execute("SELECT faction FROM houses WHERE house_id = ?", (house_id,)).fetchone()[0] != "blackwater":
+        _write(data_dir / f"recipes-{house_id}.json", recipes.recipe_book(conn, house_id, settings, reqs))
     _write(data_dir / f"house-{house_id}.json",
            {"signals": signals, "market": {"cols": MARKET_COLS, "rows": [list(r) for r in market]}})
 

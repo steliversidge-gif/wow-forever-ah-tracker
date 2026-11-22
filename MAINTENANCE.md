@@ -30,6 +30,9 @@ Work down this list. Stop at the first thing that fixes it.
      top of [src/forever_ah/blizzard.py](src/forever_ah/blizzard.py). This needs a programmer.
    - *Anything mentioning Wowhead*: harmless. Recipe and item-source lookups stop; nothing
      else is affected.
+   - *Anything mentioning wago.tools*: harmless. Recipe skill levels stop refreshing and the
+     last copy is kept. If Forever is ever renamed there, the product code `WAGO_PRODUCT` is at
+     the top of [src/forever_ah/blizzard.py](src/forever_ah/blizzard.py).
 3. **Sixty days of silence.** GitHub switches off scheduled workflows in a repository with
    no commits for 60 days. The workflow commits a small heartbeat file monthly to prevent
    this. If it ever happens, GitHub emails you; press **Enable workflow** on the Actions page.

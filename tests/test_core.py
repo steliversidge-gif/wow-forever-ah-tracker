@@ -672,3 +672,83 @@ def test_scorecard_retunes_the_time_stretch_once_a_day(tmp_path):
     assert scorecard.recalibrate(conn, tun, "2026-11-16 20:00:00") == {}      # only once a day
     assert scorecard.calibrated(conn, Tuning(auto_stretch=False)).stretch_dip == 1.0
     assert scorecard.summary(conn)["stretch"]["dip"] == 1.2
+
+
+RECIPE_ITEM_XML = (
+    '<wowhead><item id="12835"><name><![CDATA[Plans: Annihilator]]></name><class id="9"><![CDATA[Recipes]]></class>'
+    '<htmlTooltip><![CDATA[<table><tr><td>Requires <a href="https://www.wowhead.com/forever/skill=164/blacksmithing" '
+    'class="q1">Blacksmithing</a> (300)<br>Requires <a href="https://www.wowhead.com/forever/spells/professions/blacksmithing" '
+    'class="q1">Master Axesmith</a><br><span class="q2">Use: <a href="https://www.wowhead.com/forever/spell=16991/annihilator">'
+    'Teaches you how to make an Annihilator.</a></span>]]></htmlTooltip><json><![CDATA["classs":9,"id":12835,'
+    '"name":"Plans: Annihilator","source":[2]]]></json><jsonEquip><![CDATA["reqskill":164,"reqskillrank":300]]>'
+    '</jsonEquip></item></wowhead>')
+
+
+def test_recipe_items_say_what_they_teach_and_what_it_takes():
+    from forever_ah.blizzard import parse_wowhead_facts
+    f = parse_wowhead_facts(RECIPE_ITEM_XML)
+    assert f["teaches_spell"] == 16991 and f["req_rank"] == 300 and f["req_spec"] == "Master Axesmith"
+    assert parse_wowhead_facts(RECIPE_ITEM_XML.replace("Teaches you", "Shows you"))["teaches_spell"] is None
+
+
+def _recipe_db(tmp_path):
+    from forever_ah import db
+    conn = db.connect(tmp_path / "r.db")
+    conn.execute("INSERT INTO houses VALUES (114, 'Horde', 'horde', 2, NULL)")
+    conn.execute("INSERT INTO snapshots (snapshot_id, house_id, published_at, fetched_at, n_auctions, n_commodities) "
+                 "VALUES (1, 114, '2026-11-22 10:00:00', 'x', 0, 0)")
+    # Thorium Bar (made from ore by a trainer recipe) and Lionheart Helm (taught by Plans).
+    for item_id, name, cls, vendor in ((12359, "Thorium Bar", "Trade Goods", 150), (10620, "Thorium Ore", "Trade Goods", 0),
+                                       (12640, "Lionheart Helm", "Armor", 50000), (12833, "Plans: Lionheart Helm", "Recipe", 0)):
+        conn.execute("INSERT INTO items (item_id, name, item_class, vendor_sell, fetched_at, attempts) VALUES (?, ?, ?, ?, 'x', 0)",
+                     (item_id, name, cls, vendor))
+        conn.execute("INSERT INTO variants (variant_id, item_id, bonus) VALUES (?, ?, '')", (item_id, item_id))
+    for variant, cheapest, market, typical, sold in ((12359, 2500, 2550, 2600, 8000), (10620, 2100, 2150, 2200, 9000),
+                                                     (12640, 7_500_000, 7_500_000, 7_400_000, 1.5), (12833, 4_000_000, 4_000_000, None, 0.5)):
+        conn.execute("INSERT INTO market (house_id, variant_id, is_commodity, min_price, market_price, quantity, listings, "
+                     "ref_price, trend_per_day, cv, sold_per_day, total_sold, n_snaps) VALUES (114, ?, 1, ?, ?, 50, 5, ?, 0, 0, ?, 100, 48)",
+                     (variant, cheapest, market, typical, sold))
+    facts = "INSERT INTO item_facts VALUES (?, ?, '[1]', NULL, ?, ?, 1, ?, 'x', 1, ?, ?, ?, ?)"
+    conn.execute(facts, (12359, "Thorium Bar", 186, "Smelt Thorium", '[[10620, 1, "Thorium Ore"]]', 16153, 0, None, None))
+    conn.execute(facts, (12640, "Lionheart Helm", 164, "Lionheart Helm", '[[12359, 80, "Thorium Bar"]]', 16729, 0, None, None))
+    conn.execute(facts, (12833, "Plans: Lionheart Helm", None, None, None, None, 16729, 300, "Armorsmith"))
+    conn.executemany("INSERT INTO recipe_skills VALUES (?, ?, ?, ?, 'b', 'x')", [(16153, 186, 250, 250), (16729, 164, 320, 340)])
+    conn.commit()
+    return conn
+
+
+def test_requirements_are_exact_from_recipe_items_and_estimated_otherwise(tmp_path):
+    from forever_ah import recipes
+    reqs = recipes.requirements(_recipe_db(tmp_path))
+    helm, bar = reqs[16729], reqs[16153]
+    assert (helm.need, helm.exact, helm.spec, helm.learned_from) == (300, True, "Armorsmith", 12833)
+    assert (bar.need, bar.exact, bar.yellow, bar.grey) == (250 - recipes.ESTIMATE_GAP, False, 250, 250)
+    salt = reqs[19566]                                     # made with the Salt Shaker, not a profession spell
+    assert (salt.skill_line, salt.need, salt.exact) == (165, 250, False)
+
+
+def test_recipe_book_prices_each_recipe_for_the_house(tmp_path):
+    from forever_ah import recipes
+    from forever_ah.config import Settings
+    book = recipes.recipe_book(_recipe_db(tmp_path), 114, Settings(root=tmp_path))
+    rows = {r["n"]: r for r in book["recipes"]}
+    bar, helm = rows["Thorium Bar"], rows["Lionheart Helm"]
+    assert bar["p"] == "Mining" and bar["cost"] == 2150 and bar["sell"] == 2500            # cheapest listing under typical
+    assert bar["net"] == round(2500 * 0.95) - 2150                                          # smelting beats selling the ore
+    assert helm["p"] == "Blacksmithing" and helm["need"] == 300 and helm["ex"] == 1 and helm["sp"] == "Armorsmith"
+    assert helm["cost"] == 80 * 2550 and helm["learn"] == {"i": 12833, "n": "Plans: Lionheart Helm", "p": 4_000_000}
+    assert book["specs"] == {"Blacksmithing": ["Armorsmith"]}
+
+
+def test_recipe_skills_refresh_daily_and_keep_the_old_copy_on_a_bad_download(tmp_path, monkeypatch):
+    from forever_ah import collector, db
+    conn = db.connect(tmp_path / "s.db")
+    good = [{"SkillLine": "164", "Spell": str(i), "TrivialSkillLineRankLow": "100", "TrivialSkillLineRankHigh": "120"}
+            for i in range(1200)] + [{"SkillLine": "6", "Spell": "116", "TrivialSkillLineRankLow": "0", "TrivialSkillLineRankHigh": "0"}]
+    monkeypatch.setattr(collector, "forever_skill_abilities", lambda: ("1.60.1.1", good))
+    assert collector.resolve_recipe_skills(conn) == 1200                    # class spells (skill line 6) left out
+    assert collector.resolve_recipe_skills(conn) == 0                       # not again the same day
+    conn.execute("UPDATE recipe_skills SET fetched_at = '2026-01-01 00:00:00'")
+    monkeypatch.setattr(collector, "forever_skill_abilities", lambda: ("1.60.1.2", good[:10]))
+    assert collector.resolve_recipe_skills(conn) == 0                       # implausibly short: keep what we have
+    assert conn.execute("SELECT COUNT(*), MAX(build) FROM recipe_skills").fetchone()[:] == (1200, "1.60.1.1")

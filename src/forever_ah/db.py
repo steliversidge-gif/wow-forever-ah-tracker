@@ -14,6 +14,7 @@ tallied into one small summary row per item per hourly snapshot.
   calibration values the scorecard re-tunes by itself (how far to stretch "sells in")
   rate_counts hourly tallies the sale / expiry / repost base rates are re-measured from
   item_facts  per item, from Wowhead: how it is obtained and, if crafted, its recipe
+  recipe_skills per recipe, from Forever's client data: its profession and skill colours
   item_daily  one row per item per day it sold, kept for months after the hourly
               rows are pruned: the long view (week on week, day of the week)
   house_daily one row per house per day: everything that sold
@@ -24,7 +25,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS houses (
@@ -184,8 +185,20 @@ CREATE TABLE IF NOT EXISTS item_facts (
     reagents   TEXT,                      -- JSON [[item id, count, name], ...]
     fetched_at TEXT NOT NULL,
     ok         INTEGER NOT NULL,          -- 0 when Wowhead had nothing; retried after a day
-    spell_id   INTEGER                    -- the recipe's spell id; 1,000,000+ means it is new in Forever
+    spell_id   INTEGER,                   -- the recipe's spell id; 1,000,000+ means it is new in Forever
+    teaches_spell INTEGER,                -- recipe items (Plans, Patterns...): the recipe spell they teach; 0 = none
+    req_rank   INTEGER,                   --   ...and the profession skill needed to learn it
+    req_spec   TEXT                       --   ...and the specialisation it needs, e.g. "Master Axesmith"
 );
+
+CREATE TABLE IF NOT EXISTS recipe_skills (
+    spell_id   INTEGER PRIMARY KEY,       -- a profession recipe, from Forever's own client data (wago.tools)
+    skill_line INTEGER NOT NULL,          -- profession skill-line id (see professions.PROFESSIONS)
+    yellow     INTEGER,                   -- skill at which the recipe turns yellow
+    grey       INTEGER,                   -- skill at which it turns grey
+    build      TEXT NOT NULL,             -- client build the data came from
+    fetched_at TEXT NOT NULL
+) WITHOUT ROWID;
 
 CREATE TABLE IF NOT EXISTS item_daily (
     house_id     INTEGER NOT NULL,
@@ -221,6 +234,9 @@ MIGRATIONS = {
     4: (),   # likewise: item_daily and house_daily
     5: ("ALTER TABLE item_facts ADD COLUMN spell_id INTEGER",),
     6: ("ALTER TABLE signal_log ADD COLUMN net_ok INTEGER",),
+    7: ("ALTER TABLE item_facts ADD COLUMN teaches_spell INTEGER",
+        "ALTER TABLE item_facts ADD COLUMN req_rank INTEGER",
+        "ALTER TABLE item_facts ADD COLUMN req_spec TEXT"),
 }
 
 
