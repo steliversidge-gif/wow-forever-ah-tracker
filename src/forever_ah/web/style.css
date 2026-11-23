@@ -117,3 +117,4 @@ details { margin: 8px 0; } summary { cursor: pointer; color: var(--text-2); font
 .sk { font-size: 11px; font-weight: 700; padding: 1px 5px; border-radius: 4px; border: 1px solid currentColor; }
 .sk-orange { color: #d4661c; } .sk-yellow { color: #a68a00; } .sk-green { color: #2f9e44; } .sk-grey { color: var(--text-3); }
 .sk-cannot { color: var(--text-3); text-decoration: line-through; }
+.sec-name { min-width: 7ch; color: var(--text); }

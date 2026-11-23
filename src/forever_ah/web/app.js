@@ -17,18 +17,30 @@ const inCat = (cls, cat) => !cat || (CATS[cat] || []).includes(cls);
 const catSelect = id => `<label>Category<select id="${id}"><option value="">All</option>${
   Object.keys(CATS).map(c => `<option>${c}</option>`).join('')}</select></label>`;
 
-// Your professions: two slots (Primary, Secondary), each a profession, a skill level and a
-// specialisation, plus the recipes you have ticked as known. Remembered in this browser only.
+// Your professions, as the game has them: two primary professions (each a profession, a skill level
+// and a specialisation) and the three secondary ones (a skill level each, 0 = not learned), plus the
+// recipes you have ticked as known. Remembered in this browser only.
+const SECONDARY = ['Cooking', 'First Aid', 'Fishing'];
 const PROFILE = { slots: [{ prof: '', skill: 300, spec: '' }, { prof: '', skill: 300, spec: '' }],
-  known: [], onlyKnown: false, view: 'overview', focus: '' };
+  secondary: { Cooking: 0, 'First Aid': 0, Fishing: 0 }, known: [], onlyKnown: false, view: 'overview', focus: '' };
 try { Object.assign(PROFILE, JSON.parse(localStorage.getItem('fah-profile') || '{}')); } catch { /* private window */ }
+PROFILE.secondary = { Cooking: 0, 'First Aid': 0, Fishing: 0, ...PROFILE.secondary };
+// An earlier version let a secondary profession take a primary slot: move it across.
+PROFILE.slots.forEach(s => { if (SECONDARY.includes(s.prof)) { PROFILE.secondary[s.prof] = s.skill; s.prof = ''; s.spec = ''; } });
 PROFILE.knownSet = new Set(PROFILE.known);
 function saveProfile() {
   const { knownSet, ...rest } = PROFILE;
   try { localStorage.setItem('fah-profile', JSON.stringify({ ...rest, known: [...knownSet] })); } catch { /* not remembered */ }
 }
-const hasProfile = () => PROFILE.slots.some(s => s.prof);
-const slotFor = prof => PROFILE.slots.find(s => s.prof && s.prof === prof);
+const hasProfile = () => PROFILE.slots.some(s => s.prof) || SECONDARY.some(p => PROFILE.secondary[p] > 0);
+function slotFor(prof) {
+  if (SECONDARY.includes(prof)) {
+    const skill = PROFILE.secondary[prof] || 0;
+    return skill > 0 ? { prof, skill, spec: '' } : undefined;
+  }
+  return PROFILE.slots.find(s => s.prof && s.prof === prof);
+}
+const myProfs = () => [...PROFILE.slots.filter(s => s.prof).map(s => s.prof), ...SECONDARY.filter(p => PROFILE.secondary[p] > 0)];
 // Whether your profile can make a recipe: right profession, enough skill, the specialisation, and
 // (if you asked for it) ticked as known.
 function canMake(prof, need, spec, spell) {
@@ -553,7 +565,8 @@ function barChart(el, t, values, label, when) {
 const ALL_PROFS = ['Alchemy', 'Blacksmithing', 'Enchanting', 'Engineering', 'Leatherworking', 'Tailoring',
   'Mining', 'Herbalism', 'Skinning', 'Cooking', 'First Aid', 'Fishing'];
 const GATHER_PROFS = ['Mining', 'Herbalism', 'Skinning', 'Fishing'];
-const SLOT_NAMES = ['Primary', 'Secondary'];
+const PRIMARY_PROFS = ALL_PROFS.filter(p => !SECONDARY.includes(p));
+const SLOT_NAMES = ['Primary profession', 'Second primary profession'];
 const P = { q: '', sort: 'day', can: true, profitable: true };   // recipe list filters
 const DAY_CAP = 20;   // "profit a day" assumes you sell at most this many a day, or one craft per cooldown
 
@@ -586,24 +599,37 @@ const skillCell = (x, slot) => {
 };
 
 function profileSummary() {
-  const parts = PROFILE.slots.filter(s => s.prof).map(s => `${s.prof} ${s.skill}${s.spec && s.spec !== 'none' ? ` (${s.spec})` : ''}`);
+  const parts = PROFILE.slots.filter(s => s.prof).map(s => `${s.prof} ${s.skill}${s.spec && s.spec !== 'none' ? ` (${s.spec})` : ''}`)
+    .concat(SECONDARY.filter(p => PROFILE.secondary[p] > 0).map(p => `${p} ${PROFILE.secondary[p]}`));
   return parts.length ? parts.join(' · ') + (PROFILE.onlyKnown ? ' · known recipes only' : '') : 'not set';
 }
 function profileHtml(specs) {
   return `<details class="profile"${hasProfile() ? '' : ' open'}><summary><b>Your professions:</b> ${esc(profileSummary())}</summary>
     <div class="profile-body">${PROFILE.slots.map((slot, i) => `<fieldset data-slot="${i}"><legend>${SLOT_NAMES[i]}</legend>
-      <div class="radios">${['', ...ALL_PROFS].map(pr => `<label><input type="radio" name="prof${i}" value="${esc(pr)}"${slot.prof === pr ? ' checked' : ''}>${pr || 'None'}</label>`).join('')}</div>
+      <div class="radios">${['', ...PRIMARY_PROFS].map(pr => `<label><input type="radio" name="prof${i}" value="${esc(pr)}"${slot.prof === pr ? ' checked' : ''}>${pr || 'None'}</label>`).join('')}</div>
       <label class="slider">Skill <input type="range" min="0" max="300" step="1" value="${slot.skill}" data-k="skill"><output>${slot.skill}</output></label>
       ${(specs[slot.prof] || []).length ? `<label class="slider">Specialisation <select data-k="spec">
         <option value="">Don't filter</option><option value="none">None</option>
         ${specs[slot.prof].map(sp => `<option${slot.spec === sp ? ' selected' : ''}>${esc(sp)}</option>`).join('')}</select></label>` : ''}
     </fieldset>`).join('')}
+    <fieldset data-sec="1"><legend>Secondary professions <span class="muted">(0 = not learned)</span></legend>
+      ${SECONDARY.map(p => `<label class="slider"><span class="sec-name">${esc(p)}</span>
+        <input type="range" min="0" max="300" step="1" value="${PROFILE.secondary[p]}" data-sec="${esc(p)}"><output>${PROFILE.secondary[p]}</output></label>`).join('')}
+    </fieldset>
     <label class="known-only"><input type="checkbox" id="only-known"${PROFILE.onlyKnown ? ' checked' : ''}> Only recipes I've ticked as known
       <span class="muted">(${num(PROFILE.knownSet.size)} ticked)</span></label>
     <p class="muted">Remembered in this browser. The Buy list uses it too: its CRAFT rows show only what you can make.</p></div></details>`;
 }
 function bindProfile(root, onChange) {
-  root.querySelectorAll('fieldset').forEach(fs => {
+  const sec = $('fieldset[data-sec]', root);
+  if (sec) sec.addEventListener('input', e => {
+    const t = e.target;
+    if (!t.dataset.sec) return;
+    PROFILE.secondary[t.dataset.sec] = Number(t.value); t.nextElementSibling.value = t.value;
+    saveProfile();
+    onChange(false);
+  });
+  root.querySelectorAll('fieldset[data-slot]').forEach(fs => {
     const slot = PROFILE.slots[Number(fs.dataset.slot)];
     fs.addEventListener('input', e => {
       const t = e.target;
@@ -687,7 +713,7 @@ function drawOverview(d) {
 }
 
 function drawDetail(d) {
-  const mine = PROFILE.slots.filter(s => s.prof).map(s => s.prof);
+  const mine = myProfs();
   if (!PROFILE.focus) PROFILE.focus = mine[0] || 'Blacksmithing';
   const prof = PROFILE.focus, slot = slotFor(prof), gather = d.gather[prof] || [];
   const others = ALL_PROFS.filter(p => !mine.includes(p));
@@ -704,7 +730,7 @@ function drawDetail(d) {
     </div>
     ${prof === 'Mining' ? `<div class="note"><b>Smelt or sell?</b> For smelting, "profit each" is what a bar earns over
       selling the ore it took. Positive: smelt. Negative or nothing: sell the ore.</div>` : ''}
-    ${!slot ? `<p class="muted">${esc(prof)} is not in your profile, so recipes are not filtered by skill. Set it as Primary or Secondary above to see what you can make.</p>` : ''}
+    ${!slot ? `<p class="muted">${esc(prof)} is not in your profile, so recipes are not filtered by skill. Add it to your professions above to see what you can make.</p>` : ''}
     <div id="pr-list"></div>
     ${gather.length ? `<h2>What ${esc(prof.toLowerCase())} gathers, by gold traded a day</h2>
       <div class="table-wrap"><table><thead><tr><th>Item</th><th class="num">Price</th><th class="num">Sold / day</th>
