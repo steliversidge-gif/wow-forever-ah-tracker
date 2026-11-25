@@ -19,10 +19,12 @@ const catSelect = id => `<label>Category<select id="${id}"><option value="">All<
 
 // Your professions, as the game has them: two primary professions (each a profession, a skill level
 // and a specialisation) and the three secondary ones (a skill level each, 0 = not learned), plus the
-// recipes you have ticked as known. Remembered in this browser only.
+// recipes you have ticked as known. Remembered in this browser only. buyFilter: whether the Buy list
+// limits crafts and disenchants to what the profile can make (off = every trade, as an overview).
 const SECONDARY = ['Cooking', 'First Aid', 'Fishing'];
 const PROFILE = { slots: [{ prof: '', skill: 300, spec: '' }, { prof: '', skill: 300, spec: '' }],
-  secondary: { Cooking: 0, 'First Aid': 0, Fishing: 0 }, known: [], onlyKnown: false, view: 'overview', focus: '' };
+  secondary: { Cooking: 0, 'First Aid': 0, Fishing: 0 }, known: [], onlyKnown: false, view: 'overview', focus: '',
+  buyFilter: true };
 try { Object.assign(PROFILE, JSON.parse(localStorage.getItem('fah-profile') || '{}')); } catch { /* private window */ }
 PROFILE.secondary = { Cooking: 0, 'First Aid': 0, Fishing: 0, ...PROFILE.secondary };
 // An earlier version let a secondary profession take a primary slot: move it across.
@@ -193,7 +195,9 @@ async function viewBuy() {
     </div>
     <p class="chips"><span>Your professions:</span> ${esc(profileSummary())}
       <a href="#/professions">${hasProfile() ? 'Change' : 'Set them'}</a>
-      <span class="muted">${hasProfile() ? 'Crafts and disenchants are limited to what you can make.' : 'Set them to see only crafts you can make.'}</span></p>
+      ${hasProfile() ? `<label class="known-only"><input type="checkbox" id="f-mine"${PROFILE.buyFilter ? ' checked' : ''}>
+        Only crafts I can make</label><span class="muted" id="f-mine-note"></span>`
+        : '<span class="muted">Set them to see only crafts you can make.</span>'}</p>
     ${cycleNote(h.price_by_hour)}
     <div id="buy-out"></div>`;
   $('#f-risk').value = F.risk; $('#f-play').value = F.play; $('#f-sort').value = F.sort; $('#f-cat').value = F.cat;
@@ -201,11 +205,16 @@ async function viewBuy() {
   const draw = () => {
     const budget = F.budget === '' ? Infinity : Number(F.budget) * 10000;
     const minProfit = Number(F.minProfit || 0) * 100, q = F.q.trim().toLowerCase();
-    let rows = d.signals.filter(s => s.buy_cost <= budget && s.profit >= minProfit
+    const matching = d.signals.filter(s => s.buy_cost <= budget && s.profit >= minProfit
       && RISK_RANK[s.risk_level] <= RISK_RANK[F.risk] && (!F.play || s.strategy === F.play)
       && inCat(s.item_class, F.cat)
-      && profileAllows(s)
       && (!q || s.name.toLowerCase().includes(q)));
+    const filtering = hasProfile() && PROFILE.buyFilter;
+    let rows = filtering ? matching.filter(profileAllows) : matching;
+    const hidden = matching.length - rows.length, note = $('#f-mine-note');
+    if (note) note.textContent = filtering
+      ? (hidden ? `${hidden} trade${hidden === 1 ? '' : 's'} hidden that your professions can't make.` : 'Nothing hidden by your professions.')
+      : 'Showing every trade, whatever the profession.';
     const sorters = {
       profit: (a, b) => b.profit - a.profit, roi: (a, b) => b.roi - a.roi,
       risk: (a, b) => a.risk_score - b.risk_score || b.profit - a.profit,
@@ -240,6 +249,8 @@ async function viewBuy() {
   const bind = (id, key) => $(id).addEventListener('input', e => { F[key] = e.target.value; draw(); });
   bind('#f-budget', 'budget'); bind('#f-profit', 'minProfit'); bind('#f-risk', 'risk');
   bind('#f-play', 'play'); bind('#f-sort', 'sort'); bind('#f-q', 'q'); bind('#f-cat', 'cat');
+  const mine = $('#f-mine');
+  if (mine) mine.addEventListener('change', e => { PROFILE.buyFilter = e.target.checked; saveProfile(); draw(); });
   draw();
 }
 
